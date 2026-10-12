@@ -13,7 +13,7 @@ SYSTEM_PROMPT = (
     "inline math between single dollar signs ($x^2$), "
     "displayed equations between double dollar signs ($$ ... $$). "
     "Never write math as plain text or ASCII art."
-    "After each question you will get a summary of the top web-searches on the question"
+    "You are provided with top web-searches of the question the user asked. DO NOT JUST SUMMARISE THEM, use them in fully-fledged responses."
 )
 
 def chat_stream(model, messages):

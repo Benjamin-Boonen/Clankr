@@ -46,6 +46,7 @@ def send_message(request):
     def search(query, n=7):
         hits = [{"title": h["title"], "url": h["href"], "description": h["body"]}
         for h in DDGS().text(query, max_results=5)]
+        print(hits)
         return hits
     
     Message.objects.create(chat=chat, role='web-search', content=search(content))
