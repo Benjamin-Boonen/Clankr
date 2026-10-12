@@ -6,6 +6,8 @@ from django.views.decorators.http import require_POST
 from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message
 from . import ollama
+from ddgs import DDGS
+
 
 @login_required
 def index(request):
@@ -41,6 +43,15 @@ def send_message(request):
 
     full_reply = []
 
+    def search(query, n=7):
+        hits = DDGS().text(query, max_results=n)
+        out = [{"title": h["title"], "url": h["href"], "description": h["body"]} for h in hits]
+        return "\n\n".join(
+            f"[{i+1}] {h['title']} ({h['url']})\n{h['description']}"
+            for i, h in enumerate(hits)
+        )
+    
+    Message.objects.create(chat=chat, role='web-search', content=search(content))
     def stream():
         # first chunk: send the chat_id so the frontend knows which chat this is
         yield f"data: {json.dumps({'chat_id': chat.id})}\n\n"

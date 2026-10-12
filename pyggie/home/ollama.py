@@ -16,35 +16,6 @@ SYSTEM_PROMPT = (
     "After each question you will get a summary of the top web-searches on the question"
 )
 
-def web_search(query: str) -> str:
-    """
-    Searches the web and returns the summaries of top results.
-    
-    Args:
-        query: The search query to be executed.
-        
-    Returns:
-        A string containing the summaries of the top results.
-    """
-    try:
-        from brave import Brave
-        brave = Brave(api_key=os.getenv("BRAVE_API_KEY"))
-        results = brave.search(q=query, count=10, raw=True)
-        web_results = results.get("web", {}).get("results", [])
-        
-        summaries = []
-        for result in web_results:
-            if 'profile' not in result:
-                continue
-            url = result['url']
-            header = f"{result['profile']['name']} - {result['profile']['long_name']}"
-            title = result['title']
-            snippet = result['description']
-            summaries.append(f"{header}\n{title}\n{snippet}\n{url}")
-        return "\n\n".join(summaries)
-    except Exception as e:
-        return f"Error searching the web: {e}"
-
 def chat_stream(model, messages):
     """Generator that yields text chunks as Ollama produces them."""
     resp = requests.post(f"{OLLAMA_BASE}/api/chat", json={
