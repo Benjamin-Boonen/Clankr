@@ -44,12 +44,9 @@ def send_message(request):
     full_reply = []
 
     def search(query, n=7):
-        hits = DDGS().text(query, max_results=n)
-        out = [{"title": h["title"], "url": h["href"], "description": h["body"]} for h in hits]
-        return "\n\n".join(
-            f"[{i+1}] {h['title']} ({h['url']})\n{h['description']}"
-            for i, h in enumerate(hits)
-        )
+        hits = [{"title": h["title"], "url": h["href"], "description": h["body"]}
+        for h in DDGS().text(query, max_results=5)]
+        return hits
     
     Message.objects.create(chat=chat, role='web-search', content=search(content))
     def stream():
