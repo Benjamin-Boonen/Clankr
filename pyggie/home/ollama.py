@@ -18,11 +18,15 @@ OLLAMA_BASE = "http://localhost:11434"
 @lru_cache(maxsize=None)
 def get_caps(name):
     r = requests.post(f"{OLLAMA_BASE}/api/show", json={"model": name})
+    if not r.ok:
+        print("OLLAMA SAYS:", r.text)
     r.raise_for_status()
     return r.json().get("capabilities", [])
 
 def get_models():
     resp = requests.get(f"{OLLAMA_BASE}/api/tags")
+    if not resp.ok:
+        print("OLLAMA SAYS:", resp.text)
     resp.raise_for_status()
     out = []
     for m in resp.json()['models']:
@@ -74,6 +78,8 @@ def chat_stream(model, messages):
             payload["tools"] = TOOLS
 
         resp = requests.post(f"{OLLAMA_BASE}/api/chat", json=payload, stream=True)
+        if not resp.ok:
+            print("OLLAMA SAYS:", resp.text)
         resp.raise_for_status()
 
         content, tool_calls = [], []
