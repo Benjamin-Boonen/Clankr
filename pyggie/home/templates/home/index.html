@@ -671,7 +671,7 @@
         <div class="dot"></div>
         <select id="modelSelect">
           {% for m in models %}
-            <option value="{{ m }}">{{ m }}</option>
+            <option value="{{ m.name }}">{{ m.name }}</option>
           {% empty %}
             <option value="">no models found</option>
           {% endfor %}
