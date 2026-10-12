@@ -1,8 +1,8 @@
-# home/ollama.py  (new file — wrapper for Ollama API)
-<<<<<<< HEAD
-<<<<<<< HEAD
 import requests, trafilatura
+import json
+import datetime
 from ddgs import DDGS
+from functools import lru_cache
 
 TOOLS = [
   {"type":"function","function":{"name":"web_search",
@@ -12,18 +12,6 @@ TOOLS = [
     "description":"Read the full text of a URL from search results.",
     "parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
 ]
-=======
-=======
->>>>>>> main
-import json
-import datetime
-import requests
-import trafilatura
-from ddgs import DDGS
-<<<<<<< HEAD
->>>>>>> 2c105c0 (tools)
-=======
->>>>>>> main
 
 OLLAMA_BASE = "http://localhost:11434"
 
@@ -56,66 +44,8 @@ SYSTEM_PROMPT = (
     "words and cite the URLs you used."
 )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-
-def run_tool(name, args):
-    if name == "web_search":
-        return str([{"title":h["title"],"url":h["href"],"snippet":h["body"]}
-                    for h in DDGS().text(args["query"], max_results=5)])
-    if name == "fetch_page":
-        html = trafilatura.fetch_url(args["url"])
-        return (trafilatura.extract(html) or "no content")[:6000]
-
-def chat_stream(model, messages):
-    msgs = [{"role":"system","content":SYSTEM_PROMPT}] + messages
-    for _ in range(4):                      # max 4 tool rounds
-        r = requests.post(f"{OLLAMA_BASE}/api/chat",
-              json={"model":model,"messages":msgs,"tools":TOOLS,"stream":False}).json()["message"]
-        if not r.get("tool_calls"):
-            yield r["content"]; return
-        msgs.append(r)
-        for c in r["tool_calls"]:
-            f = c["function"]
-            yield {"status": f"{f['name']}: {list(f['arguments'].values())[0]}"}
-            msgs.append({"role":"tool","tool_name":f["name"],
-                         "content":run_tool(f["name"], f["arguments"])})
-=======
-TOOLS = [
-    {"type": "function", "function": {
-        "name": "web_search",
-        "description": "Search the web. Returns titles, URLs and short snippets.",
-        "parameters": {"type": "object",
-                       "properties": {"query": {"type": "string"}},
-                       "required": ["query"]}}},
-    {"type": "function", "function": {
-        "name": "fetch_page",
-        "description": "Download a web page and return its main text.",
-        "parameters": {"type": "object",
-                       "properties": {"url": {"type": "string"}},
-                       "required": ["url"]}}},
-]
-
-=======
-TOOLS = [
-    {"type": "function", "function": {
-        "name": "web_search",
-        "description": "Search the web. Returns titles, URLs and short snippets.",
-        "parameters": {"type": "object",
-                       "properties": {"query": {"type": "string"}},
-                       "required": ["query"]}}},
-    {"type": "function", "function": {
-        "name": "fetch_page",
-        "description": "Download a web page and return its main text.",
-        "parameters": {"type": "object",
-                       "properties": {"url": {"type": "string"}},
-                       "required": ["url"]}}},
-]
-
->>>>>>> main
 MAX_ROUNDS = 5
 PAGE_CHARS = 6000
-
 
 def run_tool(name, args):
     try:
@@ -171,7 +101,3 @@ def chat_stream(model, messages):
             yield "status", f"{'Searching' if fn['name'] == 'web_search' else 'Reading'}: {label}"
             msgs.append({"role": "tool", "tool_name": fn["name"],
                          "content": run_tool(fn["name"], args)})
-<<<<<<< HEAD
->>>>>>> 2c105c0 (tools)
-=======
->>>>>>> main
