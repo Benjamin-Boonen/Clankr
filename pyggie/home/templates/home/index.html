@@ -985,6 +985,9 @@
                   currentChatId = data.chat_id;
                   setActive(currentChatId);
               }
+              if (data.status) {
+                  if (!raw) bubble.innerHTML = '<em style="opacity:.6"></em>', bubble.firstChild.textContent = data.status;
+              }
               if (data.token) {
                   raw += data.token;
                   bubble.innerHTML = renderMarkdown(raw);

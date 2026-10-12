@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clank.r</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f0e;
+      --surface:   #141714;
+      --surface2:  #1a1d1a;
+      --border:    rgba(255,255,255,0.07);
+      --border2:   rgba(255,255,255,0.13);
+      --text:      #e8ebe5;
+      --muted:     #7a8577;
+      --accent:    #a3c98a;
+      --accent2:   #6fa84e;
+      --user-bg:   #1e2b1a;
+      --user-brd:  rgba(163,201,138,0.2);
+      --usermsg-bg:  #21381b;
+      --usermsg-brd: rgba(163,201,138,0.32);
+      --ai-bg:     #151815;
+      --radius:    12px;
+      --font-body: 'DM Sans', sans-serif;
+      --font-mono: 'DM Mono', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* ─── layout ─── */
+    .shell {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 100vh;
+      height: 100vh;
+    }
+
+    /* ─── sidebar ─── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 20px 18px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      font-family: var(--font-mono);
+      font-size: 17px;
+      font-weight: 500;
+      letter-spacing: -0.03em;
+      color: var(--accent);
+    }
+
+    .logo span {
+      color: var(--muted);
+      font-weight: 300;
+    }
+
+    .new-chat-btn {
+      margin: 14px 14px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border2);
+      background: transparent;
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      width: calc(100% - 28px);
+    }
+
+    .new-chat-btn:hover { background: var(--surface2); border-color: var(--accent); }
+
+    .new-chat-btn svg { color: var(--accent); flex-shrink: 0; }
+
+    .history-label {
+      padding: 18px 18px 6px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .history-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 8px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .history-item {
+      padding: 8px 10px;
+      border-radius: 7px;
+      font-size: 13px;
+      color: var(--muted);
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.1s, color 0.1s;
+    }
+
+    .history-item:hover { background: var(--surface2); color: var(--text); }
+    .history-item.active { background: var(--user-bg); color: var(--accent); }
+
+    .sidebar-footer {
+      border-top: 1px solid var(--border);
+      padding: 12px 14px;
+    }
+
+    .user-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .user-pill:hover { background: var(--surface2); }
+
+    .avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--user-bg);
+      border: 1px solid var(--user-brd);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .user-name { font-size: 13px; font-weight: 400; }
+    .user-role { font-size: 11px; color: var(--muted); }
+
+    /* ─── main ─── */
+    .main {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .topbar {
+      height: 52px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .model-badge {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--muted);
+      padding: 5px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .model-badge:hover { border-color: var(--border2); color: var(--text); }
+
+    .model-badge select {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .model-badge select option { background: var(--surface); color: var(--text); }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent2);
+      box-shadow: 0 0 6px var(--accent2);
+    }
+
+    .topbar-actions { display: flex; gap: 8px; }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .icon-btn:hover { background: var(--surface2); color: var(--text); }
+
+    /* ─── messages ─── */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 0;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border2) transparent;
+    }
+
+    .message-row {
+      max-width: 720px;
+      margin: 0 auto 28px;
+      padding: 0 32px;
+      animation: fadeUp 0.25s ease both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg-meta {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+    }
+
+    .msg-avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+
+    .msg-avatar.ai  { background: var(--surface2); border: 1px solid var(--border2); color: var(--accent); }
+    .msg-avatar.usr { background: var(--usermsg-bg); border: 1px solid var(--usermsg-brd); color: var(--accent); }
+
+    /* user messages: bubble on the left, avatar to its right */
+    .message-row.user {
+      display: flex;
+      justify-content: flex-end;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .message-row.user .msg-bubble { max-width: 85%; }
+
+    .message-row.user .msg-avatar {
+      width: 28px;
+      height: 28px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+    }
+
+    .msg-bubble {
+      padding: 14px 18px;
+      border-radius: var(--radius);
+      font-size: 14.5px;
+      line-height: 1.65;
+    }
+
+    .msg-bubble.ai  { background: var(--ai-bg);   border: 1px solid var(--border); }
+    .msg-bubble.usr { background: var(--usermsg-bg); border: 1px solid var(--usermsg-brd); white-space: pre-wrap; }
+
+    /* ─── rendered markdown (AI replies) ─── */
+    .msg-bubble.ai > :first-child { margin-top: 0; }
+    .msg-bubble.ai > :last-child  { margin-bottom: 0; }
+    .msg-bubble.ai p, .msg-bubble.ai ul, .msg-bubble.ai ol,
+    .msg-bubble.ai pre, .msg-bubble.ai blockquote, .msg-bubble.ai table { margin: 0 0 12px; }
+    .msg-bubble.ai ul, .msg-bubble.ai ol { padding-left: 22px; }
+    .msg-bubble.ai li { margin-bottom: 3px; }
+    .msg-bubble.ai strong { font-weight: 500; color: #fff; }
+    .msg-bubble.ai em { font-style: italic; }
+    .msg-bubble.ai h1, .msg-bubble.ai h2, .msg-bubble.ai h3, .msg-bubble.ai h4 {
+      font-weight: 500; letter-spacing: -0.01em; margin: 18px 0 8px; line-height: 1.3;
+    }
+    .msg-bubble.ai h1 { font-size: 19px; }
+    .msg-bubble.ai h2 { font-size: 17px; }
+    .msg-bubble.ai h3, .msg-bubble.ai h4 { font-size: 15px; }
+    .msg-bubble.ai a { color: var(--accent); }
+    .msg-bubble.ai hr { border: none; border-top: 1px solid var(--border2); margin: 16px 0; }
+    .msg-bubble.ai blockquote {
+      border-left: 2px solid var(--accent2); padding-left: 14px; color: var(--muted);
+    }
+    .msg-bubble.ai pre {
+      background: var(--bg); border: 1px solid var(--border2);
+      border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+    }
+    .msg-bubble.ai pre code {
+      background: none; border: none; padding: 0; color: var(--text);
+      font-size: 13px; line-height: 1.55;
+    }
+    .msg-bubble.ai table { border-collapse: collapse; font-size: 13.5px; }
+    .msg-bubble.ai th, .msg-bubble.ai td { border: 1px solid var(--border2); padding: 6px 10px; }
+    .msg-bubble.ai th { background: var(--surface2); font-weight: 500; }
+
+    .msg-bubble code {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      background: rgba(163,201,138,0.08);
+      border: 1px solid rgba(163,201,138,0.15);
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: var(--accent);
+    }
+
+    /* ─── empty state ─── */
+    .empty-state {
+      max-width: 520px;
+      margin: auto;
+      padding: 0 32px;
+      text-align: center;
+      animation: fadeUp 0.3s ease both;
+    }
+
+    .empty-glyph {
+      font-family: var(--font-mono);
+      font-size: 32px;
+      color: var(--accent);
+      opacity: 0.6;
+      margin-bottom: 20px;
+      letter-spacing: -0.05em;
+    }
+
+    .empty-title {
+      font-size: 22px;
+      font-weight: 300;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .empty-sub {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 28px;
+      line-height: 1.7;
+    }
+
+    .suggestions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .suggestion {
+      padding: 12px 14px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      font-size: 12.5px;
+      color: var(--muted);
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      font-family: var(--font-body);
+      line-height: 1.5;
+    }
+
+    .suggestion:hover { border-color: var(--accent); color: var(--text); background: var(--user-bg); }
+    .suggestion strong { display: block; color: var(--text); font-weight: 500; font-size: 13px; margin-bottom: 2px; }
+
+    /* ─── input ─── */
+    .input-area {
+      padding: 16px 24px 20px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .input-box {
+      max-width: 720px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 13px;
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 10px 12px 10px 16px;
+      transition: border-color 0.2s;
+    }
+
+    .input-box:focus-within { border-color: rgba(163,201,138,0.4); }
+
+    .input-box textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      resize: none;
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 14.5px;
+      line-height: 1.55;
+      max-height: 180px;
+      min-height: 24px;
+      scrollbar-width: none;
+    }
+
+    .input-box textarea::placeholder { color: var(--muted); }
+
+    .send-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent2);
+      color: #0d0f0e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    .send-btn:hover { background: var(--accent); }
+    .send-btn:active { transform: scale(0.94); }
+    .send-btn:disabled { background: var(--surface2); color: var(--muted); cursor: default; }
+
+    .input-hint {
+      max-width: 720px;
+      margin: 7px auto 0;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+      text-align: center;
+      opacity: 0.7;
+    }
+
+    /* ─── history empty text ─── */
+    .history-empty {
+      padding: 8px 10px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+      opacity: 0.7;
+    }
+
+    /* ─── settings modal ─── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 50;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: 100%;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 22px;
+      animation: fadeUp 0.2s ease both;
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    .modal-title { font-size: 16px; font-weight: 500; }
+
+    .modal-section { margin-bottom: 18px; }
+
+    .modal-label {
+      display: block;
+      margin-bottom: 6px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .modal select {
+      width: 100%;
+      padding: 9px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      outline: none;
+    }
+
+    .modal select:focus { border-color: rgba(163,201,138,0.4); }
+
+    .modal-note { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+    .modal-btn {
+      width: 100%;
+      padding: 9px;
+      border-radius: 8px;
+      border: 1px solid var(--border2);
+      background: transparent;
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .modal-btn:hover { background: var(--surface2); border-color: var(--accent); }
+
+    /* ─── scrollbar ─── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">Clank.r<span>.ai</span></div>
+    </div>
+
+    <button class="new-chat-btn" onclick="newChat()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      New conversation
+    </button>
+
+    <div class="history-label">Recent</div>
+    <div class="history-list" id="historyList">
+      {% for chat in chats %}
+        <div class="history-item" data-id="{{ chat.id }}">{{ chat.title|default:"Untitled" }}</div>
+      {% empty %}
+        <div class="history-empty">No conversations yet</div>
+      {% endfor %}
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-pill">
+        <div class="avatar">{{ user.username|first|upper }}</div>
+        <div>
+          <div class="user-name">{{ user.username }}</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <div class="main">
+    <div class="topbar">
+      <div class="model-badge">
+        <div class="dot"></div>
+        <select id="modelSelect">
+          {% for m in models %}
+            <option value="{{ m }}">{{ m }}</option>
+          {% empty %}
+            <option value="">no models found</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" title="Share">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+        </button>
+        <button class="icon-btn" title="Settings" onclick="openSettings()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- messages -->
+    <div class="messages" id="messages">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-glyph">&gt;_</div>
+        <div class="empty-title">What can I help with?</div>
+        <div class="empty-sub">Ask anything. I'll be direct.</div>
+        <div class="suggestions">
+          <button class="suggestion" onclick="useSuggestion('Explain how transformers work in ML')">
+            <strong>Explain a concept</strong>How do transformers work?
+          </button>
+          <button class="suggestion" onclick="useSuggestion('Debug this Python code: ')">
+            <strong>Debug code</strong>Paste an error or snippet
+          </button>
+          <button class="suggestion" onclick="useSuggestion('Summarise the key ideas in ')">
+            <strong>Summarise</strong>A paper, article, or topic
+          </button>
+          <button class="suggestion" onclick="useSuggestion('Compare ')">
+            <strong>Compare options</strong>Two approaches or tools
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- input -->
+    <div class="input-area">
+      <div class="input-box">
+        <textarea
+          id="msgInput"
+          placeholder="Message Clank.r…"
+          rows="1"
+          onkeydown="handleKey(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</div>
+    </div>
+  </div>
+</div>
+
+<!-- settings -->
+<div class="modal-backdrop" id="settingsModal" onclick="if (event.target === this) closeSettings()">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Settings</div>
+      <button class="icon-btn" title="Close" onclick="closeSettings()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-section">
+      <label class="modal-label" for="defaultModel">Default model</label>
+      <select id="defaultModel"></select>
+      <div class="modal-note">Used when you open Clank.r. Saved in this browser.</div>
+    </div>
+
+    <div class="modal-section">
+      <label class="modal-label">Signed in as {{ user.username }}</label>
+      <form method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="modal-btn">Log out</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  const input   = document.getElementById('msgInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const msgs    = document.getElementById('messages');
+  const empty   = document.getElementById('emptyState');
+  const historyList = document.getElementById('historyList');
+  const modelSel    = document.getElementById('modelSelect');
+  const defaultSel  = document.getElementById('defaultModel');
+  const userInitial = "{{ user.username|first|upper|escapejs }}";
+  let currentChatId = null;
+  let busy = false;   // true while a reply is streaming
+
+  // ─── default model (remembered in this browser) ───
+  defaultSel.innerHTML = modelSel.innerHTML;
+  try {
+    const saved = localStorage.getItem('Clank.r.defaultModel');
+    if (saved && [...modelSel.options].some(o => o.value === saved)) {
+      modelSel.value = saved;
+      defaultSel.value = saved;
+    }
+  } catch (e) {}
+  defaultSel.addEventListener('change', () => {
+    try { localStorage.setItem('Clank.r.defaultModel', defaultSel.value); } catch (e) {}
+    modelSel.value = defaultSel.value;
+  });
+
+  // ─── settings panel ───
+  function openSettings()  { document.getElementById('settingsModal').classList.add('open'); }
+  function closeSettings() { document.getElementById('settingsModal').classList.remove('open'); }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
+
+  // ─── history ───
+  function setActive(id) {
+    historyList.querySelectorAll('.history-item').forEach(el => {
+      el.classList.toggle('active', id !== null && el.dataset.id === String(id));
+    });
+  }
+
+  function addHistoryItem(id, title) {
+    historyList.querySelector('.history-empty')?.remove();
+    const el = document.createElement('div');
+    el.className = 'history-item';
+    el.dataset.id = id;
+    el.textContent = title || 'Untitled';
+    historyList.prepend(el);
+  }
+
+  historyList.addEventListener('click', e => {
+    const item = e.target.closest('.history-item');
+    if (item) loadChat(item.dataset.id);
+  });
+
+  async function loadChat(id) {
+    if (busy) return;
+    const resp = await fetch(`/chat/${id}/`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    msgs.innerHTML = '';
+    data.messages.forEach(m => addMessage(m.content, m.role === 'user' ? 'user' : 'ai'));
+    currentChatId = data.id;
+    setActive(data.id);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  input.addEventListener('input', () => {
+    sendBtn.disabled = input.value.trim() === '';
+  });
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!sendBtn.disabled) sendMessage();
+    }
+  }
+
+  function addMessage(text, role) {
+    if (empty) empty.style.display = 'none';
+    const row = document.createElement('div');
+    if (role === 'user') {
+      row.className = 'message-row user';
+      row.innerHTML = `
+        <div class="msg-bubble usr">${escHtml(text)}</div>
+        <div class="msg-avatar usr">${escHtml(userInitial)}</div>
+      `;
+    } else {
+      row.className = 'message-row';
+      row.innerHTML = `
+        <div class="msg-meta">
+          <div class="msg-avatar ai">C</div>
+          ai
+        </div>
+        <div class="msg-bubble ai">${renderMarkdown(text)}</div>
+      `;
+    }
+    msgs.appendChild(row);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // markdown -> HTML, then sanitised so model output can't inject scripts
+  function renderMarkdown(text) {
+    return DOMPurify.sanitize(marked.parse(text, { breaks: true }));
+  }
+
+  async function sendMessage() {
+      const text = input.value.trim();
+      if (!text) return;
+
+      addMessage(text, 'user');
+      input.value = '';
+      autoResize(input);
+      sendBtn.disabled = true;
+      busy = true;
+
+      // create an empty AI bubble to stream into
+      const bubble = addEmptyAiBubble();
+
+      const resp = await fetch('/send/', {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json',
+              'X-CSRFToken': getCookie('csrftoken'),
+          },
+          body: JSON.stringify({
+              content: text,
+              model: modelSel.value,
+              chat_id: currentChatId
+          })
+      });
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let raw = '';     // the full reply so far, as markdown
+      let buffer = '';  // holds a partial line until the rest arrives
+
+      while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const payload = line.slice(6);
+              if (payload === '[DONE]') { sendBtn.disabled = false; busy = false; break; }
+
+              const data = JSON.parse(payload);
+              if (data.chat_id) {
+                  // first message of a new chat: add it to the sidebar
+                  if (currentChatId === null) addHistoryItem(data.chat_id, text.slice(0, 60));
+                  currentChatId = data.chat_id;
+                  setActive(currentChatId);
+              }
+              if (data.token) {
+                  raw += data.token;
+                  bubble.innerHTML = renderMarkdown(raw);
+              }
+  
+              msgs.scrollTop = msgs.scrollHeight;
+          }
+      }
+      busy = false;   // stream closed, even if [DONE] never arrived
+  }
+
+  function addEmptyAiBubble() {
+      const row = document.createElement('div');
+      row.className = 'message-row';
+      row.innerHTML = `
+          <div class="msg-meta">
+              <div class="msg-avatar ai">C</div>
+              ai
+          </div>
+          <div class="msg-bubble ai"></div>
+      `;
+      msgs.appendChild(row);
+      msgs.scrollTop = msgs.scrollHeight;
+      return row.querySelector('.msg-bubble');
+  }
+  
+  function getCookie(name) {
+      return document.cookie.split(';')
+          .map(c => c.trim())
+          .find(c => c.startsWith(name + '='))
+          ?.split('=')[1];
+  }
+
+  function useSuggestion(text) {
+    input.value = text;
+    input.focus();
+    sendBtn.disabled = false;
+    autoResize(input);
+    input.setSelectionRange(text.length, text.length);
+  }
+
+  function newChat() {
+    if (busy) return;
+    msgs.innerHTML = '';
+    msgs.appendChild(empty);
+    empty.style.display = '';
+    currentChatId = null;
+    setActive(null);
+    input.value = '';
+    sendBtn.disabled = true;
+  }
+</script>
+
+</body>
+</html>

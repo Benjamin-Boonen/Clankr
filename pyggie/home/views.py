@@ -6,7 +6,6 @@ from django.views.decorators.http import require_POST
 from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message
 from . import ollama
-from ddgs import DDGS
 
 
 @login_required
@@ -38,25 +37,19 @@ def send_message(request):
 
     history = [
         {'role': 'assistant' if m.role == 'ai' else 'user', 'content': m.content}
-        for m in chat.messages.all()
+        for m in chat.messages.filter(role__in=['user', 'ai'])
     ]
 
     full_reply = []
 
-    def search(query, n=7):
-        hits = [{"title": h["title"], "url": h["href"], "description": h["body"]}
-        for h in DDGS().text(query, max_results=5)]
-        print(hits)
-        return hits
-    
-    Message.objects.create(chat=chat, role='web-search', content=search(content))
     def stream():
         # first chunk: send the chat_id so the frontend knows which chat this is
         yield f"data: {json.dumps({'chat_id': chat.id})}\n\n"
 
-        for token in ollama.chat_stream(model=model, messages=history):
-            full_reply.append(token)
-            yield f"data: {json.dumps({'token': token})}\n\n"
+        for kind, text in ollama.chat_stream(model=model, messages=history):
+            if kind == 'token':
+                full_reply.append(text)
+            yield f"data: {json.dumps({kind: text})}\n\n"
 
         # save complete response once done
         Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
