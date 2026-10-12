@@ -321,6 +321,18 @@
     .msg-bubble.ai  { background: var(--ai-bg);   border: 1px solid var(--border); }
     .msg-bubble.usr { background: var(--usermsg-bg); border: 1px solid var(--usermsg-brd); white-space: pre-wrap; }
 
+    /* ─── thinking box + tool chips (AI replies) ─── */
+    .think { margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+    .think summary { cursor: pointer; }
+    .think div { white-space: pre-wrap; margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--border); }
+    .tools { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+    .tools:empty { display: none; }
+    .msg-bubble.ai .answer > :first-child { margin-top: 0; }
+    .msg-bubble.ai .answer > :last-child  { margin-bottom: 0; }
+    .chip { font: 12px var(--font-mono); color: var(--muted); background: var(--surface);
+            border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px;
+            width: fit-content; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     /* ─── rendered markdown (AI replies) ─── */
     .msg-bubble.ai > :first-child { margin-top: 0; }
     .msg-bubble.ai > :last-child  { margin-bottom: 0; }
@@ -948,6 +960,15 @@
       // create an empty AI bubble to stream into
       const bubble = addEmptyAiBubble();
 
+      // the bubble has three parts: thinking box, tool chips, answer
+      const thinkBox = document.createElement('details');
+      thinkBox.className = 'think'; thinkBox.hidden = true;
+      thinkBox.innerHTML = '<summary>Thinking…</summary><div></div>';
+      const tools = document.createElement('div'); tools.className = 'tools';
+      const answer = document.createElement('div'); answer.className = 'answer';
+      bubble.append(thinkBox, tools, answer);
+      let thinkText = '', thinkDone = false;
+
       const resp = await fetch('/send/', {
           method: 'POST',
           headers: {
@@ -985,12 +1006,25 @@
                   currentChatId = data.chat_id;
                   setActive(currentChatId);
               }
-              if (data.status) {
-                  if (!raw) bubble.innerHTML = '<em style="opacity:.6"></em>', bubble.firstChild.textContent = data.status;
+              if (data.thinking) {
+                  thinkBox.hidden = false; thinkBox.open = true;
+                  thinkText += data.thinking;
+                  thinkBox.lastChild.textContent = thinkText;
+              }
+              if (data.tool) {
+                  const chip = document.createElement('div');
+                  chip.className = 'chip';
+                  chip.textContent = (data.tool.name === 'web_search' ? '🔍 Searching: ' : '📄 Reading: ') + data.tool.arg;
+                  tools.append(chip);
               }
               if (data.token) {
+                  if (!thinkDone) {
+                      thinkDone = true;
+                      thinkBox.open = false;
+                      thinkBox.firstChild.textContent = 'Thought';
+                  }
                   raw += data.token;
-                  bubble.innerHTML = renderMarkdown(raw);
+                  answer.innerHTML = renderMarkdown(raw);
               }
   
               msgs.scrollTop = msgs.scrollHeight;
