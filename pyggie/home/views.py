@@ -35,6 +35,7 @@ def send_message(request):
 
     Message.objects.create(chat=chat, role='user', content=content)
 
+    # only real conversation goes to the model (ignores old 'web-search' rows)
     history = [
         {'role': 'assistant' if m.role == 'ai' else 'user', 'content': m.content}
         for m in chat.messages.filter(role__in=['user', 'ai'])
@@ -46,12 +47,12 @@ def send_message(request):
         # first chunk: send the chat_id so the frontend knows which chat this is
         yield f"data: {json.dumps({'chat_id': chat.id})}\n\n"
 
-        for kind, text in ollama.chat_stream(model=model, messages=history):
+        # kind is 'token', 'thinking' or 'tool'; only the answer is saved
+        for kind, value in ollama.chat_stream(model=model, messages=history):
             if kind == 'token':
-                full_reply.append(text)
-            yield f"data: {json.dumps({kind: text})}\n\n"
+                full_reply.append(value)
+            yield f"data: {json.dumps({kind: value})}\n\n"
 
-        # save complete response once done
         Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
         yield "data: [DONE]\n\n"
 

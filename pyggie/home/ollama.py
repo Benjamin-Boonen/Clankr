@@ -1,39 +1,31 @@
-import requests, trafilatura
+# home/ollama.py — wrapper for the Ollama API, with tool calling (web search)
 import json
 import datetime
-from ddgs import DDGS
 from functools import lru_cache
 
-TOOLS = [
-  {"type":"function","function":{"name":"web_search",
-    "description":"Search the web for current or uncertain facts.",
-    "parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
-  {"type":"function","function":{"name":"fetch_page",
-    "description":"Read the full text of a URL from search results.",
-    "parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
-]
+import requests
+import trafilatura
+from ddgs import DDGS
 
 OLLAMA_BASE = "http://localhost:11434"
 
-@lru_cache(maxsize=None)
-def get_caps(name):
-    r = requests.post(f"{OLLAMA_BASE}/api/show", json={"model": name})
-    if not r.ok:
-        print("OLLAMA SAYS:", r.text)
-    r.raise_for_status()
-    return r.json().get("capabilities", [])
+MAX_ROUNDS = 5       # max tool-calling rounds per answer
+PAGE_CHARS = 6000    # how much of a fetched page the model gets to read
 
-def get_models():
-    resp = requests.get(f"{OLLAMA_BASE}/api/tags")
-    if not resp.ok:
-        print("OLLAMA SAYS:", resp.text)
-    resp.raise_for_status()
-    out = []
-    for m in resp.json()['models']:
-        caps = get_caps(m['name'])
-        tag = " ".join(t for t, c in (("th", "thinking"), ("to", "tools")) if c in caps)
-        out.append({"name": m['name'], "tag": tag})
-    return out
+TOOLS = [
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the web for current or uncertain facts. Returns titles, URLs and short snippets.",
+        "parameters": {"type": "object",
+                       "properties": {"query": {"type": "string"}},
+                       "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "fetch_page",
+        "description": "Read the full text of a URL from search results.",
+        "parameters": {"type": "object",
+                       "properties": {"url": {"type": "string"}},
+                       "required": ["url"]}}},
+]
 
 SYSTEM_PROMPT = (
     "Format replies in Markdown. Write all mathematics in LaTeX: "
@@ -45,11 +37,36 @@ SYSTEM_PROMPT = (
     "for chit-chat, maths, or things you know well. Write your own focused search "
     "query (not the user's raw message). Search snippets are short: fetch_page the "
     "1-3 most promising URLs before answering. Then write a full answer in your own "
-    "words and cite the URLs you used."
+    "words and cite the URLs you used. "
+    "To use a tool, call it. Never write tool calls as text."
 )
 
-MAX_ROUNDS = 5
-PAGE_CHARS = 6000
+
+def _check(resp):
+    """Like raise_for_status, but includes Ollama's own error message."""
+    if not resp.ok:
+        raise RuntimeError(f"Ollama {resp.status_code}: {resp.text}")
+
+
+@lru_cache(maxsize=None)
+def get_caps(name):
+    """Capabilities of a model, e.g. ['completion', 'tools', 'thinking']."""
+    r = requests.post(f"{OLLAMA_BASE}/api/show", json={"model": name})
+    _check(r)
+    return tuple(r.json().get("capabilities", []))
+
+
+def get_models():
+    """[{'name': 'qwen3:8b', 'tag': '🧠🔧'}, ...]  (🧠 thinking, 🔧 tools)"""
+    resp = requests.get(f"{OLLAMA_BASE}/api/tags")
+    _check(resp)
+    out = []
+    for m in resp.json()['models']:
+        caps = get_caps(m['name'])
+        tag = ("🧠" if "thinking" in caps else "") + ("🔧" if "tools" in caps else "")
+        out.append({"name": m['name'], "tag": tag})
+    return out
+
 
 def run_tool(name, args):
     try:
@@ -67,20 +84,26 @@ def run_tool(name, args):
 
 
 def chat_stream(model, messages):
-    """Yields ("status", text) while tools run and ("token", text) for the answer."""
+    """Yields (kind, value):
+         ("thinking", text)             reasoning tokens
+         ("tool", {"name", "arg"})      a tool is being run
+         ("token", text)                the answer
+    """
     system = SYSTEM_PROMPT + f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
     msgs = [{"role": "system", "content": system}] + messages
+    caps = get_caps(model)
 
     for round_no in range(MAX_ROUNDS):
+        payload = {"model": model, "messages": msgs, "stream": True,
+                   "options": {"temperature": 0.2}}
+        if "thinking" in caps:
+            payload["think"] = True
         # on the last round, withhold tools so the model must answer
-        payload = {"model": model, "messages": msgs, "stream": True}
-        if round_no < MAX_ROUNDS - 1:
+        if "tools" in caps and round_no < MAX_ROUNDS - 1:
             payload["tools"] = TOOLS
 
         resp = requests.post(f"{OLLAMA_BASE}/api/chat", json=payload, stream=True)
-        if not resp.ok:
-            print("OLLAMA SAYS:", resp.text)
-        resp.raise_for_status()
+        _check(resp)
 
         content, tool_calls = [], []
         for line in resp.iter_lines():
@@ -88,6 +111,8 @@ def chat_stream(model, messages):
                 continue
             chunk = json.loads(line)
             m = chunk.get("message", {})
+            if th := m.get("thinking"):
+                yield "thinking", th
             if token := m.get("content"):
                 content.append(token)
                 yield "token", token
@@ -104,6 +129,6 @@ def chat_stream(model, messages):
             fn = call["function"]
             args = fn.get("arguments") or {}
             label = next(iter(args.values()), "") if args else ""
-            yield "status", f"{'Searching' if fn['name'] == 'web_search' else 'Reading'}: {label}"
+            yield "tool", {"name": fn["name"], "arg": label}
             msgs.append({"role": "tool", "tool_name": fn["name"],
                          "content": run_tool(fn["name"], args)})
