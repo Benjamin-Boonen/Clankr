@@ -431,6 +431,14 @@
       margin-bottom: 0;
     }
 
+    .agent-toggle {margin-left:.75rem;font-size:.8rem;cursor:pointer;user-select:none;opacity:.85}
+    .agent-toggle input {accent-color: var(--accent, #7c9);margin-right:.25rem}
+    .approval {border:1px solid var(--accent, #7c9);border-radius:10px;padding:.6rem .8rem;margin:.5rem 0;font-size:.85rem}
+    .approval pre {white-space:pre-wrap;word-break:break-word;margin:.4rem 0;max-height:200px;overflow:auto;font-size:.8rem}
+    .approval button {margin-right:.4rem;padding:.25rem .7rem;border-radius:6px;border:1px solid currentColor;background:none;color:inherit;cursor:pointer}
+    .approval.done {opacity:.55}
+    .result {font-size:.75rem;opacity:.7;white-space:pre-wrap;margin:.2rem 0 .4rem;max-height:120px;overflow:auto}
+    .artifact-frame {width:100%;height:420px;border:1px solid rgba(128,128,128,.4);border-radius:10px;background:#fff;margin:.5rem 0}
     .chip {
       font: 12px var(--font-mono);
       color: var(--muted);
@@ -948,6 +956,9 @@
             <option value="">no models found</option>
             {% endfor %}
           </select>
+          <label class="agent-toggle" title="Agent mode: Clank.r keeps using tools until the task is done">
+            <input type="checkbox" id="agentMode"> 🤖 Agent
+          </label>
         </div>
         <div class="topbar-actions">
           <button class="icon-btn" title="Share">
@@ -1129,6 +1140,7 @@
 
       msgs.innerHTML = '';
       data.messages.forEach(m => addMessage(m.content, m.role === 'user' ? 'user' : 'ai'));
+      (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
       currentChatId = data.id;
       setActive(data.id);
       msgs.scrollTop = msgs.scrollHeight;
@@ -1228,24 +1240,54 @@
       const tools = document.createElement('div'); tools.className = 'tools';
       const answer = document.createElement('div'); answer.className = 'answer';
       bubble.append(thinkBox, tools, answer);
-      let thinkText = '', thinkDone = false;
 
-      const resp = await fetch('/send/', {
+      const ctx = {thinkBox, tools, answer, text, raw: '', thinkDone: false, thinkText: '', waiting: false};
+      const agent = document.getElementById('agentMode').checked;
+      await consume(await postJSON(agent ? '/agent/send/' : '/send/', {
+        content: text, model: modelSel.value, chat_id: currentChatId
+      }), ctx);
+      busy = false;   // stream closed, even if [DONE] never arrived
+    }
+
+    function postJSON(url, body) {
+      return fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRFToken': getCookie('csrftoken'),
-        },
-        body: JSON.stringify({
-          content: text,
-          model: modelSel.value,
-          chat_id: currentChatId
-        })
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
+        body: JSON.stringify(body)
       });
+    }
 
+    function artifactFrame(a) {
+      const f = document.createElement('iframe');
+      f.className = 'artifact-frame';
+      f.setAttribute('sandbox', 'allow-scripts');   // no same-origin: can't touch Clank.r
+      f.src = `/artifact/${a.id}/`;
+      f.title = a.title;
+      return f;
+    }
+
+    function approvalCard(ev, ctx) {
+      const card = document.createElement('div'); card.className = 'approval';
+      const arg = ev.args.command ?? ev.args.code ?? JSON.stringify(ev.args, null, 2);
+      card.innerHTML = `<b>Permission needed:</b> <code>${escHtml(ev.name)}</code><pre>${escHtml(String(arg))}</pre>`;
+      const decide = async (approve, always) => {
+        card.classList.add('done'); card.querySelectorAll('button').forEach(b => b.disabled = true);
+        busy = true; sendBtn.disabled = true; ctx.waiting = false;
+        await consume(await postJSON('/agent/approve/', {run_id: ev.run_id, approve, always}), ctx);
+        busy = false;
+      };
+      for (const [label, ap, al] of [['Allow', true, false], ['Always allow this tool', true, true], ['Deny', false, false]]) {
+        const b = document.createElement('button'); b.textContent = label;
+        b.onclick = () => decide(ap, al); card.append(b);
+      }
+      return card;
+    }
+
+    // reads one SSE stream into the bubble described by ctx
+    async function consume(resp, ctx) {
+      const {thinkBox, tools, answer} = ctx;
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let raw = '';     // the full reply so far, as markdown
       let buffer = '';  // holds a partial line until the rest arrives
 
       while (true) {
@@ -1258,40 +1300,48 @@
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6);
-          if (payload === '[DONE]') {sendBtn.disabled = false; busy = false; break;}
+          if (payload === '[DONE]') {sendBtn.disabled = ctx.waiting; busy = ctx.waiting; break;}
 
           const data = JSON.parse(payload);
           if (data.chat_id) {
             // first message of a new chat: add it to the sidebar
-            if (currentChatId === null) addHistoryItem(data.chat_id, text.slice(0, 60));
+            if (currentChatId === null) addHistoryItem(data.chat_id, ctx.text.slice(0, 60));
             currentChatId = data.chat_id;
             setActive(currentChatId);
           }
           if (data.thinking) {
             thinkBox.hidden = false; thinkBox.open = true;
-            thinkText += data.thinking;
-            thinkBox.lastChild.textContent = thinkText;
+            ctx.thinkText += data.thinking;
+            thinkBox.lastChild.textContent = ctx.thinkText;
           }
           if (data.tool) {
             const chip = document.createElement('div');
             chip.className = 'chip';
-            chip.textContent = (data.tool.name === 'web_search' ? '🔍 Searching: ' : '📄 Reading: ') + data.tool.arg;
+            const icons = {web_search: '🔍 Searching: ', fetch_page: '📄 Reading: ', run_python: '🐍 Python: ',
+                           run_shell: '💻 Shell: ', write_file: '📝 Writing: ', read_file: '📂 Reading file: ',
+                           create_artifact: '🎨 Artifact: ', load_skill: '🧰 Skill: ', finish: '✅ Done: '};
+            chip.textContent = (icons[data.tool.name] || data.tool.name + ': ') + String(data.tool.arg).slice(0, 80);
             tools.append(chip);
           }
+          if (data.result) {
+            const r = document.createElement('div'); r.className = 'result';
+            r.textContent = data.result.out; tools.append(r);
+          }
+          if (data.artifact) tools.append(artifactFrame(data.artifact));
+          if (data.approval) {tools.append(approvalCard(data.approval, ctx)); ctx.waiting = true;}
           if (data.token) {
-            if (!thinkDone) {
-              thinkDone = true;
+            if (!ctx.thinkDone) {
+              ctx.thinkDone = true;
               thinkBox.open = false;
               thinkBox.firstChild.textContent = 'Thought';
             }
-            raw += data.token;
-            answer.innerHTML = renderMarkdown(raw);
+            ctx.raw += data.token;
+            answer.innerHTML = renderMarkdown(ctx.raw);
           }
 
           msgs.scrollTop = msgs.scrollHeight;
         }
       }
-      busy = false;   // stream closed, even if [DONE] never arrived
     }
 
     function addEmptyAiBubble() {
