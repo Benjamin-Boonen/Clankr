@@ -82,6 +82,43 @@ def get_models():
     return out
 
 
+def merge_tool_calls(calls, chunk):
+    """Merge streamed tool-call chunks into whole calls (mutates `calls`).
+    Ollama streams tool-call arguments as string fragments across chunks; a
+    fragment continues the previous call when the name matches, otherwise it
+    starts a new call. Complete (dict) arguments always start a new call.
+    Yields (name, fragment) so callers can show the arguments as they stream.
+    """
+    for tc in chunk or []:
+        fn = tc.get("function") or {}
+        frag, name = fn.get("arguments"), fn.get("name")
+        if isinstance(frag, str):
+            if calls and calls[-1]["function"].get("name") == name \
+                    and isinstance(calls[-1]["function"].get("arguments"), str):
+                calls[-1]["function"]["arguments"] += frag
+                yield name, frag
+            else:
+                if frag:
+                    yield name, frag
+                calls.append({"function": {"name": name, "arguments": frag}})
+        else:
+            calls.append({"function": {"name": name,
+                                       "arguments": frag if frag is not None else {}}})
+
+
+def parse_args(raw):
+    """Normalise tool-call arguments: JSON string -> dict."""
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {"__raw__": raw}
+    return raw or {}
+
+
 def run_tool(name, args):
     try:
         if name == "web_search":
@@ -130,7 +167,8 @@ def chat_stream(model, messages):
             if token := m.get("content"):
                 content.append(token)
                 yield "token", token
-            tool_calls.extend(m.get("tool_calls") or [])
+            for name, frag in merge_tool_calls(tool_calls, m.get("tool_calls")):
+                yield "tool_arg", {"name": name, "delta": frag}   # live, while typed
             if chunk.get("done"):
                 break
 
@@ -141,7 +179,7 @@ def chat_stream(model, messages):
                      "tool_calls": tool_calls})
         for call in tool_calls:
             fn = call["function"]
-            args = fn.get("arguments") or {}
+            args = parse_args(fn.get("arguments"))
             label = next(iter(args.values()), "") if args else ""
             yield "tool", {"name": fn["name"], "arg": label}
             msgs.append({"role": "tool", "tool_name": fn["name"],

@@ -3,6 +3,7 @@ import json
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.http import require_POST
+from django.views.decorators.clickjacking import xframe_options_exempt
 from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message, AgentRun, Artifact
 from . import agent, files
@@ -123,6 +124,9 @@ def agent_approve(request):
     return _agent_stream(run, run.chat, gen())
 
 @login_required
+@xframe_options_exempt        # the UI previews artifacts in a sandboxed iframe; a
+                               # frame-deny header made browsers show their
+                               # own "can't show this page" error inside the bubble
 def artifact_view(request, artifact_id):
     a = get_object_or_404(Artifact, id=artifact_id, chat__user=request.user)
     if a.kind == 'html':   body, ct = a.content, 'text/html'
@@ -133,3 +137,51 @@ def artifact_view(request, artifact_id):
     r = HttpResponse(body, content_type=ct + '; charset=utf-8')
     r['Content-Security-Policy'] = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'unsafe-inline'; img-src data:; connect-src 'none'"
     return r
+
+
+# ─── artifacts & skills panels ───
+
+@login_required
+def artifacts_list(request):
+    """All of the user's artifacts (most recent first)."""
+    arts = (Artifact.objects.filter(chat__user=request.user)
+           .select_related('chat').order_by('-created_at'))
+    return JsonResponse({'artifacts': [
+        {'id': a.id, 'title': a.title, 'kind': a.kind, 'chat_id': a.chat_id,
+         'chat_title': a.chat.title, 'created_at': a.created_at} for a in arts]})
+
+
+@login_required
+@require_POST
+def artifact_create(request):
+    """Create an artifact by hand from the Artifacts panel."""
+    data, _ = _parse(request)
+    title = (data.get('title') or 'Untitled').strip()[:200]
+    kind = data.get('kind', 'markdown')
+    content = data.get('content') or ''
+    if kind not in ('html', 'svg', 'markdown'):
+        return JsonResponse({'error': 'kind must be html, svg or markdown'}, status=400)
+    if not content.strip():
+        return JsonResponse({'error': 'content is empty'}, status=400)
+    chat_id = data.get('chat_id')
+    if chat_id:
+        chat = get_object_or_404(Chat, id=chat_id, user=request.user)
+    else:                      # no conversation open yet: start one for it
+        chat = Chat.objects.create(user=request.user, title=title[:60])
+    a = Artifact.objects.create(chat=chat, title=title, kind=kind, content=content)
+    return JsonResponse({'id': a.id, 'title': a.title, 'kind': a.kind, 'chat_id': chat.id})
+
+
+@login_required
+def skills_list(request):
+    return JsonResponse({'skills': agent.list_skills()})
+
+
+@login_required
+@require_POST
+def skill_create(request):
+    data, _ = _parse(request)
+    ok, err = agent.create_skill(data.get('name') or '', data.get('content') or '')
+    if err:
+        return JsonResponse({'error': err}, status=400)
+    return JsonResponse({'ok': True})

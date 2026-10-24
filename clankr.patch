@@ -1,13 +1,603 @@
+From 4f958f25e512f0178a27bdd2eb8e295223f38d64 Mon Sep 17 00:00:00 2001
+From: Benjamin-Boonen <Benjamin-Boonen@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 16:56:57 +0000
+Subject: [PATCH] Clank.r: Dyson-swarm avatar ring, background visuals setting,
+ agent switch
+
+---
+ CHANGES.md                            | 101 +++++++++-
+ pyggie/home/agent.py                  |   3 +
+ pyggie/home/templates/home/index.html | 275 ++++++++++++++++++++++----
+ 3 files changed, 340 insertions(+), 39 deletions(-)
+
+diff --git a/CHANGES.md b/CHANGES.md
+index a070527..57aa750 100644
+--- a/CHANGES.md
++++ b/CHANGES.md
+@@ -1,5 +1,18 @@
+ # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
+ 
++> **v3 follow-up patch (0003)**: avatar activity indicator, background setting,
++> agent-mode switch. All in `pyggie/home/templates/home/index.html`:
++> 1. The spinning dashed ring around the AI logo is replaced by a **Dyson-swarm**
++>    canvas overlay (32 nodes on a spherical shell, force-simulated: orbiting while
++>    the model generates, repulsed outward and held while a tool executes,
++>    dissolving on done/error — see §9).
++> 2. Settings gains **Background visuals** with three persisted options:
++>    On / **Blur behind text** (backdrop-filter blur + tint only on message
++>    surfaces, net stays sharp elsewhere) / Off (canvas hidden and its rAF work
++>    suspended). Saved in `localStorage['Clank.r.bg']` (§11).
++> 3. The 🤖 Agent checkbox is now a proper pill switch matching the UI (same
++>    `#agentMode` input, keyboard-operable, visible focus ring) (§12).
++>
+ > **v2 follow-up patch (0002)**: the first patch shipped without the `<canvas
+ > id="bgNet">`, the `#latestBtn` button and the topbar Artifacts/Skills buttons —
+ > an edit batch had failed atomically and only part of it was re-applied. The JS
+@@ -39,6 +52,15 @@ single commit. Apply with `git am clankr-*.patch` (or `git apply`).
+ - `parse_args` normalises streamed JSON-string tool arguments into dicts (this also
+   fixes a latent bug: streamed string fragments were previously passed to tools raw).
+ 
++- v3 additions: the approval path is truthful too — `agent.resume()` (agent.py)
++  emits the same `tool` event as `_process()` the moment the approved call
++  actually starts executing; the frontend no longer guesses "Running…" from the
++  HTTP response alone (it shows "Continuing…" in orbit until that event).
++  A stream that finishes without any text now settles to Done ("Finished, but
++  the model returned no text") instead of parking in an approval-style wait.
++- v3: working-status labels no longer end in "…" — the animated dots CSS
++  already provides the ellipsis, so labels used to render "Thinking……".
++
+ ## 3. Agents now always report their work (agent.py)
+ - `finish(summary)`: the summary is now emitted as visible text
+   ("**Done:** …") in the chat, not just swallowed as a tool result.
+@@ -76,11 +98,27 @@ single commit. Apply with `git am clankr-*.patch` (or `git apply`).
+   placeholder is vertically centred instead of hugging the bottom edge.
+ 
+ ## 9. Animations (index.html)
+-- The spinning ring is now SMIL (`<animateTransform rotate 0 64 64 → 360 64 64>`)
+-  with an explicit centre — it cannot render off-centre regardless of browser
+-  transform-box quirks. (The old CSS `transform-origin: 12px 12px` bug and its
+-  partial fix are both gone.)
+-- New canvas background (`#bgNet`): gas-like drifting particles linked into a net
++- **v3 — Dyson swarm avatar ring** (`DysonSwarm`, replaces the SMIL dashed ring):
++  - `AI_ICON` is now the logo plus a `<canvas class="swarm-cv">` overlay (sized
++    40px avatar + 34px pad, dpr-aware). The logo itself never moves.
++  - 32 nodes laid out on a unit sphere (Fibonacci distribution) around the logo
++    "star", rendered orthographically with a camera tilt, depth-sorted,
++    depth-faded, with faint links between 3D neighbours (the node-halo look).
++  - Physics (stylised, not orbital mechanics): a damped radial spring toward a
++    per-mode target radius (slightly underdamped so transitions overshoot like a
++    real repulsion) plus a smoothed angular velocity. Clamped delta time
++    (max 50 ms per step) so refresh rate can't change the speed.
++  - Modes, driven ONLY by the existing event-driven status calls —
++    `setStatus(state, text, mode)`: `orbit` (generating: Thinking/Drafting/Writing/
++    waiting for model/Continuing) → nodes orbit close in; `exec` (Running <tool>)
++    → nodes repulsed outward and held at a distance, rotation damps to a
++    standstill with a slight held tension; `wait` (approval needed) → slow amber
++    orbit; `done`/`error` → the swarm dissolves (alpha → 0) and the canvas fades
++    via CSS (`.working`/`.waiting` show it).
++  - One shared rAF loop serves all avatars and stops when none is animating;
++    it also steps nothing while the tab is hidden. `prefers-reduced-motion`:
++    a single static shell frame, no motion.
++- Canvas background (`#bgNet`, v2): gas-like drifting particles linked into a net
+   (lines when close), pushed away by the cursor (Obsidian-graph feel). Bounded
+   (30–90 particles), pauses when the tab is hidden, disabled under
+   `prefers-reduced-motion`, follows the accent hue.
+@@ -94,6 +132,8 @@ single commit. Apply with `git am clankr-*.patch` (or `git apply`).
+   `pyggie/home/skills/<name>/SKILL.md` and is immediately loadable via
+   `load_skill` (the model-facing tool list text refreshes on server restart).
+ 
++
++
+ ## Tests run
+ - `python manage.py check` — clean.
+ - Unit-tested in-process: streamed tool-call merging (`merge_tool_calls`),
+@@ -101,6 +141,57 @@ single commit. Apply with `git am clankr-*.patch` (or `git apply`).
+   (socket connect to 1.1.1.1:53 fails), finish-summary emission, skill
+   create/list, artifact create endpoint, iframe header exemption, template
+   rendering, and `node --check` on the page script.
++- v3 (browser, against the rendered template): all three background modes (body
++  class + canvas hidden, background loop fully stopped while Off and restarted
++  when switched back on, and a lossless-PNG blur check on the rendered page —
++  the same red test band shows a sharp 1px edge outside text surfaces and a
++  gradual ~25px ramp behind them), the agent switch (checked styling, knob
++  translate, keyboard toggling with Space and a focus-visible ring), the swarm
++  in orbit/exec/wait/done modes at real 40px size, its dissolve on done, and
++  the reduced-motion static frame.
++- v3b (browser, SSE fixture through the real consumer — fetch intercepted with
++  fake event streams, driving the actual Send/approve UI): send → thinking →
++  tool_arg → tool (exec, "Running …") → result → approval ("Waiting for your
++  approval", wait mode) → Allow ("Continuing", no exec guess) → truthful tool
++  event → result → report → Done, all verified; a no-text completion settles to
++  Done instead of an approval-style wait. Reduced-motion exercised via
++  emulated `prefers-reduced-motion` (static shell frame, motionless over time;
++  a fresh non-reduced load animates normally). Background-mode persistence verified in
++  jsdom against the shipped template with pre-seeded storage (blur restored on
++  load, off written on click, on-by-default with nothing stored) — the deploy
++  preview forbids localStorage, so no HTTPS-origin reload test was possible.
++  (Django's test runner has 0 tests in the repo — checks above are
++  `manage.py check`, in-process probes, jsdom and browser runs.)
++
++## 11. Background visuals setting (index.html, v3)
++- Settings modal gains a segmented control (On / Blur behind text / Off),
++  persisted in `localStorage['Clank.r.bg']`, applied as a body class:
++  - `bgm-on` (default): unchanged.
++  - v3b bug fix: blur-behind-text was silently inert — the message-row
++    entrance animation used `animation-fill-mode: both`, and the retained
++    forward-filled animation effect interfered with the surfaces'
++    `backdrop-filter` (nothing behind the text got blurred). Changed to
++    `backwards`: the entrance still plays, and once the animation ends its
++    effect is released. Verified with lossless PNG screenshots: the same red
++    test band edge is sharp outside text and a ~25px gradual ramp behind it.
++  - `bgm-blur`: message surfaces (`.msg-bubble.usr`, `.ai-body`, `.think`,
++    `.tool-notice`, `.approval`, `.result`) get `backdrop-filter: blur(7px)` + a
++    62% dark tint — the net stays sharp in empty space and is softened only
++    where text sits on it. (backdrop-filter requires a modern browser; the tint
++    alone still keeps text readable if unsupported.)
++  - `bgm-off`: `#bgNet` hidden via CSS and its animation loop fully stopped —
++    the frame function returns without scheduling another rAF callback, so no
++    hidden work runs at all. Switching back to On/Blur (or the tab becoming
++    visible again) restarts the loop via a `clankr:bgmode` event /
++    `visibilitychange`.
++
++## 12. Agent-mode switch (index.html, v3)
++- The `🤖 Agent` checkbox is now a small pill switch (26×15px track, 9px knob)
++  in the topbar, styled like the rest of the UI (DM Mono "Agent" label,
++  accent fill when on, dark knob). It is still the same native
++  `<input type="checkbox" id="agentMode">` (visually hidden, not `display:none`),
++  so all behaviour, form semantics and keyboard operation are unchanged; the
++  switch shows a focus-visible ring when tabbed to.
+ 
+ ## Known limitations (for the next agent)
+ - Without bubblewrap, run_python's network block is Python-level and best-effort;
+diff --git a/pyggie/home/agent.py b/pyggie/home/agent.py
+index c2e18a0..95851ca 100644
+--- a/pyggie/home/agent.py
++++ b/pyggie/home/agent.py
+@@ -233,6 +233,9 @@ def resume(run, approve, always=False):
+     run.new_artifacts = []
+     if approve:
+         if always: run.allowed = list(set(run.allowed) | {name})
++        # same truthful "tool" event as _process(): fired only once execution
++        # is actually about to run (approval already granted above).
++        yield "tool", {"name": name, "arg": next(iter(args.values()), "") if args else ""}
+         out = execute(name, args, run)
+     else:
+         out = "The user DENIED this action. Do not retry it; choose another approach or explain."
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index 20aaf76..d037a05 100644
+index 4cee103..403daaf 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -360,7 +360,7 @@
-     .msg-avatar.ai .spin {opacity: 0}
-     .msg-avatar.ai.working .spin, .msg-avatar.ai.waiting .spin {opacity: .55}
-     .msg-avatar.ai.working {animation: pulse 1.4s ease-in-out infinite}
--    .msg-avatar.ai.working .spin {transform-origin: 12px 12px; animation: spin 1.1s linear infinite}
-+    .msg-avatar.ai.working .spin {transform-box: fill-box; transform-origin: center; animation: spin 1.1s linear infinite}
+@@ -311,7 +311,11 @@
+       max-width: 720px;
+       margin: 0 auto 28px;
+       padding: 0 32px;
+-      animation: fadeUp 0.25s ease both;
++      /* 'backwards' (not 'both'): the forward-filled entrance animation
++         interfered with the bgm-blur backdrop-filter on the message surfaces.
++         Backwards fill still plays the entrance, but releases the animation
++         effect once it ends. */
++      animation: fadeUp 0.25s ease backwards;
+     }
+ 
+     @keyframes fadeUp {
+@@ -354,21 +358,20 @@
+       color: var(--accent);
+     }
+ 
+-    .msg-avatar.ai {width: 40px; height: 40px}
++    .msg-avatar.ai {width: 40px; height: 40px; position: relative}
+     .msg-avatar.ai svg {width: 100%; height: 100%}
++    /* Dyson-swarm activity ring: a canvas overlay around the logo (see DysonSwarm).
++       Hidden when idle; the swarm itself fades out on done/error. */
++    .msg-avatar.ai .swarm-cv {position: absolute; pointer-events: none; opacity: 0; transition: opacity .45s}
++    .msg-avatar.ai.working .swarm-cv, .msg-avatar.ai.waiting .swarm-cv {opacity: 1}
+     .msg-meta {gap: 12px; font-size: 14px}
+     .status {font-size: 13.5px !important}
+-    .msg-avatar.ai .spin {opacity: 0}
+-    .msg-avatar.ai.working .spin, .msg-avatar.ai.waiting .spin {opacity: .55}
+-    .msg-avatar.ai.working {animation: pulse 1.4s ease-in-out infinite}
+-    /* the ring rotation is SMIL inside the SVG (explicit rotate about 64,64) — cannot drift */
      .msg-avatar.ai.error {color: #e5645b; border-color: #e5645b}
      .msg-avatar.ai.waiting {color: #e0b04a; border-color: #e0b04a}
      .status {font-size: 11.5px; color: var(--muted)}
+     .status.error {color: #e5645b}
+     .status.waiting {color: #e0b04a}
+     .status.working::after {content: ''; display: inline-block; width: 1.2em; text-align: left; animation: dots 1.2s steps(4, end) infinite}
+-    @keyframes pulse {50% {opacity: .55}}
+     @keyframes dots {0% {content: ''} 25% {content: '.'} 50% {content: '..'} 75% {content: '...'}}
+     .msg-avatar.usr {
+       background: var(--usermsg-bg);
+@@ -455,8 +458,35 @@
+     .file-chips {display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.4rem}
+     .file-chips span {font-size:.75rem;border:1px solid rgba(128,128,128,.5);border-radius:999px;padding:.1rem .6rem;cursor:pointer}
+     .file-chips span:hover {text-decoration:line-through}
+-    .agent-toggle {margin-left:.75rem;font-size:.8rem;cursor:pointer;user-select:none;opacity:.85}
+-    .agent-toggle input {accent-color: var(--accent, #7c9);margin-right:.25rem}
++    .agent-toggle {margin-left:.75rem; display:inline-flex; align-items:center; gap:.45rem; cursor:pointer; user-select:none; position:relative}
++    .agent-toggle input {position:absolute; opacity:0; width:1px; height:1px}
++    .ag-sw {width:26px; height:15px; border-radius:999px; border:1px solid var(--border2); background:var(--surface2); position:relative; flex-shrink:0; transition:background .15s, border-color .15s}
++    .ag-sw::after {content:''; position:absolute; top:2px; left:2px; width:9px; height:9px; border-radius:50%; background:var(--muted); transition:transform .15s, background .15s}
++    .agent-toggle input:checked + .ag-sw {background:var(--accent); border-color:var(--accent)}
++    .agent-toggle input:checked + .ag-sw::after {transform:translateX(11px); background:var(--bg)}
++    .agent-toggle input:focus-visible + .ag-sw {outline:2px solid var(--accent); outline-offset:2px}
++    .ag-txt {font:11px var(--font-mono); color:var(--muted)}
++    .agent-toggle:hover .ag-txt {color:var(--text)}
++
++    /* ─── background visuals mode (settings: on / blur behind text / off) ─── */
++    body.bgm-off #bgNet {display: none}
++    body.bgm-blur .msg-bubble.usr,
++    body.bgm-blur .ai-body,
++    body.bgm-blur .think,
++    body.bgm-blur .tool-notice,
++    body.bgm-blur .approval,
++    body.bgm-blur .result {
++      backdrop-filter: blur(7px);
++      -webkit-backdrop-filter: blur(7px);
++      background: color-mix(in oklab, var(--bg) 62%, transparent);
++    }
++
++    /* segmented control (settings) */
++    .seg {display: inline-flex; border: 1px solid var(--border2); border-radius: 8px; overflow: hidden}
++    .seg button {background: none; border: none; color: var(--muted); font: 12px var(--font-mono); padding: 6px 12px; cursor: pointer}
++    .seg button + button {border-left: 1px solid var(--border2)}
++    .seg button.active {background: var(--accent); color: var(--bg)}
++    .seg button:hover:not(.active) {color: var(--text)}
+     .approval {border:1px solid var(--accent, #7c9);border-radius:10px;padding:.6rem .8rem;margin:.5rem 0;font-size:.85rem}
+     .approval pre {white-space:pre-wrap;word-break:break-word;margin:.4rem 0;max-height:200px;overflow:auto;font-size:.8rem}
+     .approval button {margin-right:.4rem;padding:.25rem .7rem;border-radius:6px;border:1px solid currentColor;background:none;color:inherit;cursor:pointer}
+@@ -1030,7 +1060,8 @@
+ 
+     @media (prefers-reduced-motion: reduce) {
+       .message-row, .modal, .empty-state {animation: none}
+-      #bgNet, .spin {display: none}
++      #bgNet {display: none}
++      /* the swarm renders one static frame — calm, no motion */
+     }
+ 
+     /* ─── scrollbar ─── */
+@@ -1106,7 +1137,9 @@
+             {% endfor %}
+           </select>
+           <label class="agent-toggle" title="Agent mode: Clank.r keeps using tools until the task is done">
+-            <input type="checkbox" id="agentMode"> 🤖 Agent
++            <input type="checkbox" id="agentMode">
++            <span class="ag-sw" aria-hidden="true"></span>
++            <span class="ag-txt">Agent</span>
+           </label>
+         </div>
+         <div class="topbar-actions">
+@@ -1217,6 +1250,16 @@
+         <input type="range" id="hueSlider" min="0" max="360" value="100">
+       </div>
+ 
++      <div class="modal-section">
++        <label class="modal-label">Background visuals</label>
++        <div class="seg" id="bgMode">
++          <button type="button" data-bg="on">On</button>
++          <button type="button" data-bg="blur">Blur behind text</button>
++          <button type="button" data-bg="off">Off</button>
++        </div>
++        <div class="modal-note">The particle net behind the chat. “Blur behind text” softens it only where messages sit on top of it. Saved in this browser.</div>
++      </div>
++
+       <div class="modal-section">
+         <label class="modal-label">Signed in as {{ user.username }}</label>
+         <form method="post" action="{% url 'logout' %}">
+@@ -1341,6 +1384,19 @@
+       setHue(localStorage.getItem('Clank.r.hue') ?? 100, false);
+     } catch (e) {setHue(100, false);}
+ 
++    // ─── background visuals: on / blur behind text / off (remembered in this browser) ───
++    const bgModeBtns = document.querySelectorAll('#bgMode button');
++    function setBgMode(m, save) {
++      document.body.classList.remove('bgm-on', 'bgm-off', 'bgm-blur');
++      document.body.classList.add('bgm-' + m);
++      bgModeBtns.forEach(b => b.classList.toggle('active', b.dataset.bg === m));
++      // let the background canvas restart itself when switched back on
++      dispatchEvent(new CustomEvent('clankr:bgmode'));
++      if (save) {try {localStorage.setItem('Clank.r.bg', m);} catch (e) { }}
++    }
++    bgModeBtns.forEach(b => b.addEventListener('click', () => setBgMode(b.dataset.bg, true)));
++    setBgMode((() => {try {return localStorage.getItem('Clank.r.bg') ?? 'on';} catch (e) {return 'on';}})(), false);
++
+     // ─── settings panel ───
+     function openSettings() {document.getElementById('settingsModal').classList.add('open');}
+     function closeSettings() {document.getElementById('settingsModal').classList.remove('open');}
+@@ -1397,24 +1453,157 @@
+       }
+     }
+ 
+-    // Clank.r's logo; the dashed ring spins while it works.
+-    // Rotation is SMIL with an explicit centre (64,64) — it can never drift off-centre.
+-    const AI_ICON = `<svg viewBox="0 0 128 128" fill="none">
+-      <circle class="spin" cx="64" cy="64" r="60" stroke="currentColor" stroke-width="4" stroke-dasharray="10 14" stroke-linecap="round" opacity=".55">
+-        <animateTransform attributeName="transform" type="rotate" from="0 64 64" to="360 64 64" dur="1.1s" repeatCount="indefinite"/>
+-      </circle>
+-      <g transform="translate(19.2 19.2) scale(.7)"><path fill="currentColor" fill-rule="evenodd" d="M16 64 A48 48 0 0 1 112 64 V92 A8 8 0 0 1 104 100 H50 L28 118 V100 H24 A8 8 0 0 1 16 92 Z M34 51 H94 A7 7 0 0 1 94 65 H34 A7 7 0 0 1 34 51 Z M64 53 A5 5 0 1 0 64 63 A5 5 0 1 0 64 53 Z M34 77 H94 V80 H34 Z M50 84 H78 V87 H50 Z"/></g></svg>`;
++    // Clank.r's logo. The activity indicator is a Dyson swarm rendered on a
++    // canvas overlay around the logo (DysonSwarm below) — the logo itself never moves.
++    const AI_ICON = `<canvas class="swarm-cv" aria-hidden="true"></canvas><svg viewBox="0 0 128 128" fill="none"><g transform="translate(19.2 19.2) scale(.7)"><path fill="currentColor" fill-rule="evenodd" d="M16 64 A48 48 0 0 1 112 64 V92 A8 8 0 0 1 104 100 H50 L28 118 V100 H24 A8 8 0 0 1 16 92 Z M34 51 H94 A7 7 0 0 1 94 65 H34 A7 7 0 0 1 34 51 Z M64 53 A5 5 0 1 0 64 63 A5 5 0 1 0 64 53 Z M34 77 H94 V80 H34 Z M50 84 H78 V87 H50 Z"/></g></svg>`;
++
++    // ─── Dyson swarm: physics-based activity ring around the AI avatar ───
++    // The logo is the "star"; 32 nodes live on a spherical shell around it.
++    //   orbit : shell rotates steadily, held near the star       (model generating)
++    //   exec  : nodes are repulsed outward & held at a distance,
++    //           rotation damps to a near-standstill              (tool running)
++    //   wait  : slow uneasy orbit, amber                         (approval needed)
++    //   done/error : the swarm dissolves.
++    // All transitions run through the force simulation (damped radial spring +
++    // smoothed angular velocity) — nothing snaps. One shared rAF loop serves
++    // every active avatar; it stops when no avatar is animating.
++    const DysonSwarm = (() => {
++      const N = 32, TILT = -0.42;
++      const CFG = {orbit: {R: .82, w: .55}, exec: {R: 1.10, w: .06}, wait: {R: .82, w: .16},
++                   done: {R: .82, w: .30}, error: {R: .82, w: .30}};
++      const reduced = matchMedia('(prefers-reduced-motion: reduce)');
++      const live = new Set();
++      let raf = 0, last = 0, paused = false;
++
++      function fibSphere(n) {          // even node layout on the unit sphere
++        const pts = [], ga = Math.PI * (3 - Math.sqrt(5));
++        for (let i = 0; i < n; i++) {
++          const y = 1 - (i / Math.max(1, n - 1)) * 2;
++          const r = Math.sqrt(Math.max(0, 1 - y * y)), t = ga * i;
++          pts.push([Math.cos(t) * r, y, Math.sin(t) * r]);
++        }
++        return pts;
++      }
++      function rotTilt(p, a) {         // orbit around Y, then tilt the camera so it reads 3D
++        const [x, y, z] = p, ca = Math.cos(a), sa = Math.sin(a);
++        const rx = x * ca + z * sa, rz = -x * sa + z * ca;
++        const ct = Math.cos(TILT), st = Math.sin(TILT);
++        return [rx, y * ct - rz * st, y * st + rz * ct];
++      }
++      function accentColor() {
++        const h = getComputedStyle(document.documentElement).getPropertyValue('--hue').trim() || '100';
++        return `hsl(${h} 60% 68%)`;
++      }
++
++      function attach(avatar) {
++        let cv = avatar.querySelector('.swarm-cv');
++        if (!cv) {cv = document.createElement('canvas'); cv.className = 'swarm-cv'; cv.setAttribute('aria-hidden', 'true'); avatar.prepend(cv);}
++        const c2 = cv.getContext('2d');
++        const S = Math.round(avatar.getBoundingClientRect().width) || 40;
++        const pad = Math.round(S * .85);          // swarm may extend past the disc when "held"
++        const dpr = Math.min(devicePixelRatio || 1, 2);
++        cv.width = (S + pad * 2) * dpr; cv.height = (S + pad * 2) * dpr;
++        cv.style.width = cv.style.height = (S + pad * 2) + 'px';
++        cv.style.left = cv.style.top = -pad + 'px';
++        const CS = S + pad * 2, CX = CS / 2, CY = CS / 2, AR = S / 2;
++        const pts = fibSphere(N), links = [];
++        const maxD = 2.2 / Math.sqrt(N);           // link spacing shrinks as nodes increase
++        for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
++          const a = pts[i], b = pts[j];
++          const d = Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
++          if (d < maxD) links.push([i, j, d / maxD]);
++        }
++        let mode = 'orbit', R = .78 * AR, Rv = 0, rot = 0, w = 0, alpha = 1, dying = false, dead = false;
++        let accent = accentColor();
++
++        const api = {
++          setMode(m) {
++            mode = m; dying = (m === 'done' || m === 'error');
++            if (!dying) {alpha = 1; dead = false;}
++            accent = m === 'error' ? '#e5645b' : m === 'wait' ? '#e0b04a' : accentColor();
++            if (reduced.matches) {api.staticFrame(); live.delete(api); return;}
++            live.add(api); ensureLoop();
++          },
++          kill() {live.delete(api);},
++          isDead() {return dead;},
++          step(dt) {
++            const t = CFG[mode] || CFG.orbit;
++            const k = 30, damp = 6.2;                // slightly underdamped: exec "pops" outward
++            Rv += (t.R * AR - R) * k * dt - Rv * damp * dt;
++            R += Rv * dt;
++            w += (t.w - w) * Math.min(1, dt * 2.6);   // smoothed angular velocity
++            rot += w * dt;
++            if (dying) {alpha = Math.max(0, alpha - dt * 1.8); if (alpha === 0) dead = true;}
++          },
++          staticFrame() {                              // reduced-motion: one calm frame
++            c2.setTransform(dpr, 0, 0, dpr, 0, 0);
++            c2.clearRect(0, 0, CS, CS);
++            c2.fillStyle = accent;
++            for (let i = 0; i < N; i++) {
++              const [x, y, z] = rotTilt(pts[i], 0);
++              c2.globalAlpha = .35 + z * .3;
++              c2.beginPath(); c2.arc(CX + x * R, CY + y * R, .8 + z * .5, 0, 7); c2.fill();
++            }
++            c2.globalAlpha = 1;
++          },
++          draw(now) {
++            c2.setTransform(dpr, 0, 0, dpr, 0, 0);
++            c2.clearRect(0, 0, CS, CS);
++            const jitter = mode === 'exec' ? .035 : .012;   // held tension while executing
++            const pr = pts.map(p => {
++              const [x, y, z] = rotTilt(p, rot);
++              const rr = R * (1 + Math.sin(now * 6e-3 + x * 9 + y * 7) * jitter);
++              return {x: CX + x * rr, y: CY + y * rr, z};
++            });
++            c2.strokeStyle = accent; c2.lineWidth = 1;
++            for (const [i, j, d] of links) {                // sparse 3D-neighbour links
++              const a = pr[i], b = pr[j], dz = (a.z + b.z) / 2;
++              c2.globalAlpha = Math.max(0, (.16 + dz * .10) * alpha) * (1 - d * .5);
++              c2.beginPath(); c2.moveTo(a.x, a.y); c2.lineTo(b.x, b.y); c2.stroke();
++            }
++            const order = pr.map((_, i) => i).sort((a, b) => pr[a].z - pr[b].z);
++            c2.fillStyle = accent;
++            for (const i of order) {                        // nodes, back to front
++              const p = pr[i];
++              c2.globalAlpha = Math.max(0, (.30 + p.z * .55) * alpha);
++              c2.beginPath(); c2.arc(p.x, p.y, .75 + Math.max(0, p.z) * .75, 0, 7); c2.fill();
++            }
++            c2.globalAlpha = 1;
++          },
++        };
++        return api;
++      }
++
++      function ensureLoop() {
++        if (raf || reduced.matches) return;
++        last = performance.now();
++        raf = requestAnimationFrame(frame);
++      }
++      function frame(now) {
++        const dt = Math.min(.05, (now - last) / 1000);     // clamp: refresh rate can't change sim speed
++        last = now;
++        if (!paused && !document.hidden) for (const s of live) s.step(dt);
++        for (const s of live) if (!s.isDead()) s.draw(now);
++        for (const s of [...live]) if (s.isDead()) s.kill();
++        raf = live.size ? requestAnimationFrame(frame) : 0;
++      }
++      return {attach};
++    })();
+ 
+     // status line next to the AI icon — purely event-driven: state comes from
+     // actual SSE events (thinking / tool_arg / tool / result / approval / token /
+     // done / error). No elapsed-time guesses about what the model is doing.
++    // `mode` drives the Dyson swarm: orbit = generating, exec = tool running,
++    // wait = approval needed; done/error dissolve it.
+     function makeStatus(body) {
+       const row = body.closest('.message-row');
+       const av = row.querySelector('.msg-avatar'), el = row.querySelector('.status');
+-      return function set(state, text) {
++      const swarm = DysonSwarm.attach(av);
++      return function set(state, text, mode) {
+         el.className = 'status ' + state;
+         av.className = 'msg-avatar ai ' + state;
+         el.textContent = text;
++        swarm.setMode(mode || ({done: 'done', error: 'error', waiting: 'wait'}[state] || 'orbit'));
+       };
+     }
+ 
+@@ -1501,7 +1690,7 @@
+       body.append(thinkBox, tools, answer);
+ 
+       const setStatus = makeStatus(body);
+-      setStatus('working', 'Sending…');
++      setStatus('working', 'Sending', 'orbit');
+       const ctx = {setStatus, step: 0, gotText: false, errored: false, thinkBox, tools, answer, text, raw: '', thinkDone: false, thinkText: '', waiting: false, liveTool: null};
+       const agent = document.getElementById('agentMode').checked;
+       const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
+@@ -1531,7 +1720,9 @@
+       if (ctx.waiting) return;                       // waiting for the user's approval
+       if (ctx.errored) return;
+       if (!ctx.sawDone) ctx.setStatus('error', 'Connection dropped before the reply finished');
+-      else if (!ctx.gotText) ctx.setStatus('waiting', 'Finished, but the model returned no text');
++      // settled, not stuck in an approval-like orbit: an empty reply is a
++      // finished (if unsatisfying) turn, so the swarm dissolves like any done
++      else if (!ctx.gotText) ctx.setStatus('done', 'Finished, but the model returned no text', 'done');
+       else ctx.setStatus('done', 'Done');
+     }
+ 
+@@ -1562,7 +1753,10 @@
+         try {
+           const r = await postJSON('/agent/approve/', {run_id: ev.run_id, approve, always});
+           if (!r.ok) throw new Error(`Server error ${r.status}`);
+-          ctx.setStatus('working', approve ? 'Running approved tool…' : 'Continuing without it…');
++          // Don't guess "running" from the HTTP response alone — the backend
++          // now emits a truthful "tool" event the moment the approved call
++          // actually starts executing; the status follows that event.
++          ctx.setStatus('working', approve ? 'Continuing' : 'Continuing without it', 'orbit');
+           await consume(r, ctx);
+           finishStatus(ctx);
+         } catch (e) {
+@@ -1621,23 +1815,23 @@
+ 
+           const data = JSON.parse(payload);
+           if (data.error) {ctx.errored = true; ctx.setStatus('error', 'Error: ' + data.error);}
+-          if (data.step) {ctx.step = data.step; ctx.setStatus('working', `Step ${data.step} · waiting for model…`);}
++          if (data.step) {ctx.step = data.step; ctx.setStatus('working', `Step ${data.step} · waiting for model`, 'orbit');}
+           if (data.chat_id) {
+-            if (!ctx.step) ctx.setStatus('working', 'Waiting for model…');
++            if (!ctx.step) ctx.setStatus('working', 'Waiting for model', 'orbit');
+             // first message of a new chat: add it to the sidebar
+             if (currentChatId === null) addHistoryItem(data.chat_id, ctx.text.slice(0, 60));
+             currentChatId = data.chat_id;
+             setActive(currentChatId);
+           }
+           if (data.thinking) {
+-            if (!ctx.errored) ctx.setStatus('working', 'Thinking…');
++            if (!ctx.errored) ctx.setStatus('working', 'Thinking', 'orbit');
+             thinkBox.hidden = false; thinkBox.open = true;
+             ctx.thinkText += data.thinking;
+             thinkBox.lastChild.textContent = ctx.thinkText;
+           }
+           if (data.tool_arg) {
+             // the model is typing a tool call — show the code as it streams in
+-            if (!ctx.errored) ctx.setStatus('working', 'Drafting ' + data.tool_arg.name + '…');
++            if (!ctx.errored) ctx.setStatus('working', 'Drafting ' + data.tool_arg.name, 'orbit');
+             if (!ctx.liveTool || ctx.liveTool.dataset.name !== data.tool_arg.name) {
+               ctx.liveTool = makeToolNotice({name: data.tool_arg.name, arg: ''});
+               ctx.liveTool.open = true;          // open while typing so the code is visible
+@@ -1646,7 +1840,7 @@
+             ctx.liveTool.querySelector('.tn-code code').textContent += data.tool_arg.delta;
+           }
+           if (data.tool) {
+-            if (!ctx.errored) ctx.setStatus('working', 'Running ' + data.tool.name + '…');
++            if (!ctx.errored) ctx.setStatus('working', 'Running ' + data.tool.name, 'exec');
+             if (ctx.liveTool && ctx.liveTool.dataset.name === data.tool.name) {
+               ctx.liveTool.querySelector('.tn-code code').textContent = String(data.tool.arg || '');
+             } else {
+@@ -1655,7 +1849,7 @@
+             }
+           }
+           if (data.result) {
+-            if (!ctx.errored) ctx.setStatus('working', 'Continuing…');
++            if (!ctx.errored) ctx.setStatus('working', 'Continuing', 'orbit');
+             if (ctx.liveTool) {
+               noticeStatus(ctx.liveTool, 'done');
+               ctx.liveTool.querySelector('.tn-out').textContent = data.result.out;
+@@ -1665,9 +1859,9 @@
+           }
+           if (data.artifact) tools.append(artifactFrame(data.artifact));
+           if (data.approval) {
+-            ctx.setStatus('waiting', 'Waiting for your approval');tools.append(approvalCard(data.approval, ctx)); ctx.waiting = true;}
++            ctx.setStatus('waiting', 'Waiting for your approval', 'wait');tools.append(approvalCard(data.approval, ctx)); ctx.waiting = true;}
+           if (data.token) {
+-            ctx.gotText = true; if (!ctx.errored) ctx.setStatus('working', 'Writing…');
++            ctx.gotText = true; if (!ctx.errored) ctx.setStatus('working', 'Writing', 'orbit');
+             if (!ctx.thinkDone) {
+               ctx.thinkDone = true;
+               thinkBox.open = false;
+@@ -1925,13 +2119,23 @@
+         cx.globalAlpha = 1;
+       }
+ 
++      let running = false;
+       function frame() {
+-        if (!document.hidden && !reduced) {
+-          step(); draw();
+-          if (++tick % 120 === 0) accent = accentColor();   // pick up hue changes
++        // fully suspended while hidden, reduced-motion, or background off —
++        // no rAF callbacks are scheduled at all in those states
++        if (document.hidden || reduced || document.body.classList.contains('bgm-off')) {
++          running = false; return;
+         }
++        step(); draw();
++        if (++tick % 120 === 0) accent = accentColor();   // pick up hue changes
++        running = true;
+         requestAnimationFrame(frame);
+       }
++      function start() {
++        if (!running && !reduced && !document.body.classList.contains('bgm-off')) {
++          running = true; requestAnimationFrame(frame);
++        }
++      }
+ 
+       cv.parentElement.addEventListener('pointermove', e => {
+         const r = cv.getBoundingClientRect();
+@@ -1939,8 +2143,11 @@
+       });
+       cv.parentElement.addEventListener('pointerleave', () => { pointer.x = pointer.y = -1e4; });
+       addEventListener('resize', resize);
++      // settings toggle / tab visibility can bring the background back to life
++      addEventListener('clankr:bgmode', start);
++      document.addEventListener('visibilitychange', start);
+       resize();
+-      if (!reduced) requestAnimationFrame(frame);
++      start();
+     })();
+   </script>
+ 
+-- 
+2.53.0

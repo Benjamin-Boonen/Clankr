@@ -9,4 +9,9 @@ urlpatterns = [
     path('agent/send/',    views.agent_send,    name='agent_send'),
     path('agent/approve/', views.agent_approve, name='agent_approve'),
     path('artifact/<int:artifact_id>/', views.artifact_view, name='artifact'),
+    # artifacts & skills panels
+    path('artifacts/',       views.artifacts_list,  name='artifacts_list'),
+    path('artifact/create/', views.artifact_create, name='artifact_create'),
+    path('skills/',          views.skills_list,    name='skills_list'),
+    path('skills/create/',   views.skill_create,   name='skill_create'),
 ]
