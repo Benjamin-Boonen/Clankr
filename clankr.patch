@@ -1,73 +1,13 @@
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index 049cdfa..20aaf76 100644
+index 20aaf76..d037a05 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -98,6 +98,8 @@
-       color: var(--accent);
-     }
- 
-+    .logo {display: flex; align-items: center; gap: 10px}
-+    .logo-mark {width: 30px; height: 30px; flex-shrink: 0}
-     .logo span {
-       color: var(--muted);
-       font-weight: 300;
-@@ -351,7 +353,12 @@
-       color: var(--accent);
-     }
- 
--    .msg-avatar.ai svg {width: 14px; height: 14px}
-+    .msg-avatar.ai {width: 40px; height: 40px}
-+    .msg-avatar.ai svg {width: 100%; height: 100%}
-+    .msg-meta {gap: 12px; font-size: 14px}
-+    .status {font-size: 13.5px !important}
-+    .msg-avatar.ai .spin {opacity: 0}
-+    .msg-avatar.ai.working .spin, .msg-avatar.ai.waiting .spin {opacity: .55}
+@@ -360,7 +360,7 @@
+     .msg-avatar.ai .spin {opacity: 0}
+     .msg-avatar.ai.working .spin, .msg-avatar.ai.waiting .spin {opacity: .55}
      .msg-avatar.ai.working {animation: pulse 1.4s ease-in-out infinite}
-     .msg-avatar.ai.working .spin {transform-origin: 12px 12px; animation: spin 1.1s linear infinite}
+-    .msg-avatar.ai.working .spin {transform-origin: 12px 12px; animation: spin 1.1s linear infinite}
++    .msg-avatar.ai.working .spin {transform-box: fill-box; transform-origin: center; animation: spin 1.1s linear infinite}
      .msg-avatar.ai.error {color: #e5645b; border-color: #e5645b}
-@@ -931,7 +938,7 @@
-     <!-- sidebar -->
-     <aside class="sidebar">
-       <div class="sidebar-header">
--        <div class="logo">Clank<span>.r</span></div>
-+        <div class="logo"><svg class="logo-mark" viewBox="0 0 128 128"><path fill="currentColor" fill-rule="evenodd" d="M16 64 A48 48 0 0 1 112 64 V92 A8 8 0 0 1 104 100 H50 L28 118 V100 H24 A8 8 0 0 1 16 92 Z M34 51 H94 A7 7 0 0 1 94 65 H34 A7 7 0 0 1 34 51 Z M64 53 A5 5 0 1 0 64 63 A5 5 0 1 0 64 53 Z M34 77 H94 V80 H34 Z M50 84 H78 V87 H50 Z"/></svg><div>Clank<span>.r</span></div></div>
-       </div>
- 
-       <button class="new-chat-btn" onclick="newChat()">
-@@ -1198,11 +1205,10 @@
-       }
-     }
- 
--    // Clank.r's icon: a little robot head; the dashed ring spins while it works
--    const AI_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
--      <circle class="spin" cx="12" cy="12" r="10.5" stroke-dasharray="3 5" opacity=".45" stroke-width="1.2"/>
--      <rect x="6" y="8" width="12" height="9" rx="2.5"/><line x1="12" y1="8" x2="12" y2="5.5"/><circle cx="12" cy="4.8" r="1"/>
--      <circle cx="9.5" cy="12.5" r=".9" fill="currentColor"/><circle cx="14.5" cy="12.5" r=".9" fill="currentColor"/></svg>`;
-+    // Clank.r's logo; the dashed ring spins while it works
-+    const AI_ICON = `<svg viewBox="0 0 128 128" fill="none">
-+      <circle class="spin" cx="64" cy="64" r="60" stroke="currentColor" stroke-width="4" stroke-dasharray="10 14" stroke-linecap="round" opacity=".55"/>
-+      <g transform="translate(19.2 19.2) scale(.7)"><path fill="currentColor" fill-rule="evenodd" d="M16 64 A48 48 0 0 1 112 64 V92 A8 8 0 0 1 104 100 H50 L28 118 V100 H24 A8 8 0 0 1 16 92 Z M34 51 H94 A7 7 0 0 1 94 65 H34 A7 7 0 0 1 34 51 Z M64 53 A5 5 0 1 0 64 63 A5 5 0 1 0 64 53 Z M34 77 H94 V80 H34 Z M50 84 H78 V87 H50 Z"/></g></svg>`;
- 
-     // status line next to the AI icon. state: working | waiting | error | done
-     function makeStatus(meta) {
-diff --git a/pyggie/home/templates/registration/login.html b/pyggie/home/templates/registration/login.html
-index b747e0a..416a126 100644
---- a/pyggie/home/templates/registration/login.html
-+++ b/pyggie/home/templates/registration/login.html
-@@ -63,6 +63,7 @@
-       text-align: center;
-     }
- 
-+    .logo-mark {width: 72px; height: 72px; margin-bottom: 8px}
-     .logo span { color: var(--muted); font-weight: 300; }
- 
-     .tagline {
-@@ -148,7 +149,7 @@
- <body>
- 
- <div class="card">
--  <div class="logo">clankr<span>.ai</span></div>
-+  <div class="logo"><svg class="logo-mark" viewBox="0 0 128 128"><path fill="currentColor" fill-rule="evenodd" d="M16 64 A48 48 0 0 1 112 64 V92 A8 8 0 0 1 104 100 H50 L28 118 V100 H24 A8 8 0 0 1 16 92 Z M34 51 H94 A7 7 0 0 1 94 65 H34 A7 7 0 0 1 34 51 Z M64 53 A5 5 0 1 0 64 63 A5 5 0 1 0 64 53 Z M34 77 H94 V80 H34 Z M50 84 H78 V87 H50 Z"/></svg><br>clankr<span>.ai</span></div>
-   <div class="tagline">Sign in to continue.</div>
- 
-   <form method="post">
+     .msg-avatar.ai.waiting {color: #e0b04a; border-color: #e0b04a}
+     .status {font-size: 11.5px; color: var(--muted)}
