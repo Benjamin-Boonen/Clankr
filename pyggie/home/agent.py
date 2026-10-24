@@ -159,6 +159,7 @@ def drive(run, model):
         if run.pending: run.save(); return
     while not run.done and run.steps < MAX_STEPS:
         run.steps += 1
+        yield "step", run.steps
         yield from _model_round(model, run)
         text, calls = run.last
         run.msgs.append({"role": "assistant", "content": text, **({"tool_calls": calls} if calls else {})})

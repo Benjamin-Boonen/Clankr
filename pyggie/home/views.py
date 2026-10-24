@@ -58,12 +58,16 @@ def send_message(request):
             yield f"data: {json.dumps({'token': '> ⚠️ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
 
         # kind is 'token', 'thinking' or 'tool'; only the answer is saved
-        for kind, value in ollama.chat_stream(model=model, messages=history):
-            if kind == 'token':
-                full_reply.append(value)
-            yield f"data: {json.dumps({kind: value})}\n\n"
+        try:
+            for kind, value in ollama.chat_stream(model=model, messages=history):
+                if kind == 'token':
+                    full_reply.append(value)
+                yield f"data: {json.dumps({kind: value})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
 
-        Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
+        if full_reply:
+            Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
         yield "data: [DONE]\n\n"
 
     return StreamingHttpResponse(stream(), content_type='text/event-stream')
@@ -74,9 +78,12 @@ def _agent_stream(run, chat, gen, prefix_events=()):
     texts = []
     def stream():
         yield f"data: {json.dumps({'chat_id': chat.id, 'run_id': run.id})}\n\n"
-        for kind, value in gen:
-            if kind == 'token': texts.append(value)
-            yield f"data: {json.dumps({kind: value})}\n\n"
+        try:
+            for kind, value in gen:
+                if kind == 'token': texts.append(value)
+                yield f"data: {json.dumps({kind: value})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
         run.save()
         if ''.join(texts).strip():
             Message.objects.create(chat=chat, role='ai', content=''.join(texts))

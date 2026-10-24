@@ -42,6 +42,20 @@ SYSTEM_PROMPT = (
 )
 
 
+def friendly_error(e):
+    """Turn an exception into something a human can act on."""
+    if isinstance(e, requests.ConnectionError):
+        return f"Can't reach Ollama at {OLLAMA_BASE}. Is it running? (try: ollama serve)"
+    if isinstance(e, requests.Timeout):
+        return "Ollama took too long to respond."
+    msg = str(e)
+    if "not found" in msg.lower() and "model" in msg.lower():
+        return msg + " (pull it with: ollama pull <name>)"
+    if "memory" in msg.lower():
+        return msg + " (the model may not fit in memory — try a smaller one)"
+    return msg or e.__class__.__name__
+
+
 def _check(resp):
     """Like raise_for_status, but includes Ollama's own error message."""
     if not resp.ok:

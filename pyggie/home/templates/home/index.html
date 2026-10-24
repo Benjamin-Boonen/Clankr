@@ -351,6 +351,18 @@
       color: var(--accent);
     }
 
+    .msg-avatar.ai svg {width: 14px; height: 14px}
+    .msg-avatar.ai.working {animation: pulse 1.4s ease-in-out infinite}
+    .msg-avatar.ai.working .spin {transform-origin: 12px 12px; animation: spin 1.1s linear infinite}
+    .msg-avatar.ai.error {color: #e5645b; border-color: #e5645b}
+    .msg-avatar.ai.waiting {color: #e0b04a; border-color: #e0b04a}
+    .status {font-size: 11.5px; color: var(--muted)}
+    .status.error {color: #e5645b}
+    .status.waiting {color: #e0b04a}
+    .status.working::after {content: ''; display: inline-block; width: 1.2em; text-align: left; animation: dots 1.2s steps(4, end) infinite}
+    @keyframes spin {to {transform: rotate(360deg)}}
+    @keyframes pulse {50% {opacity: .55}}
+    @keyframes dots {0% {content: ''} 25% {content: '.'} 50% {content: '..'} 75% {content: '...'}}
     .msg-avatar.usr {
       background: var(--usermsg-bg);
       border: 1px solid var(--usermsg-brd);
@@ -1186,6 +1198,38 @@
       }
     }
 
+    // Clank.r's icon: a little robot head; the dashed ring spins while it works
+    const AI_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle class="spin" cx="12" cy="12" r="10.5" stroke-dasharray="3 5" opacity=".45" stroke-width="1.2"/>
+      <rect x="6" y="8" width="12" height="9" rx="2.5"/><line x1="12" y1="8" x2="12" y2="5.5"/><circle cx="12" cy="4.8" r="1"/>
+      <circle cx="9.5" cy="12.5" r=".9" fill="currentColor"/><circle cx="14.5" cy="12.5" r=".9" fill="currentColor"/></svg>`;
+
+    // status line next to the AI icon. state: working | waiting | error | done
+    function makeStatus(meta) {
+      const av = meta.querySelector('.msg-avatar'), el = meta.querySelector('.status');
+      let base = '', since = 0, timer = null;
+      const paint = () => {
+        const secs = Math.round((Date.now() - since) / 1000);
+        el.textContent = base + (secs >= 4 && el.classList.contains('working') ? ` · ${secs}s` : '');
+      };
+      const hint = {0: '', 8: ' — the model may be loading into memory', 30: ' — still nothing; Ollama may be busy or stuck'};
+      return function set(state, text) {
+        base = text; since = Date.now();
+        el.className = 'status ' + state; av.className = 'msg-avatar ai ' + state;
+        el.textContent = text; clearInterval(timer);
+        if (state === 'working') {
+          const t0 = since, waitingFirst = /waiting for model/i.test(text);
+          timer = setInterval(() => {
+            paint();
+            if (waitingFirst) {
+              const secs = (Date.now() - t0) / 1000, h = secs >= 30 ? hint[30] : secs >= 8 ? hint[8] : '';
+              el.textContent = base + h + ` · ${Math.round(secs)}s`;
+            }
+          }, 1000);
+        }
+      };
+    }
+
     function addMessage(text, role) {
       if (empty) empty.style.display = 'none';
       const row = document.createElement('div');
@@ -1199,8 +1243,8 @@
         row.className = 'message-row';
         row.innerHTML = `
         <div class="msg-meta">
-          <div class="msg-avatar ai">C</div>
-          ai
+          <div class="msg-avatar ai done">${AI_ICON}</div>
+          ai <span class="status done"></span>
         </div>
         <div class="msg-bubble ai">${renderMarkdown(text)}</div>
       `;
@@ -1267,10 +1311,13 @@
       const answer = document.createElement('div'); answer.className = 'answer';
       bubble.append(thinkBox, tools, answer);
 
-      const ctx = {thinkBox, tools, answer, text, raw: '', thinkDone: false, thinkText: '', waiting: false};
+      const setStatus = makeStatus(bubble.previousElementSibling);
+      setStatus('working', 'Sending…');
+      const ctx = {setStatus, step: 0, gotText: false, errored: false, thinkBox, tools, answer, text, raw: '', thinkDone: false, thinkText: '', waiting: false};
       const agent = document.getElementById('agentMode').checked;
       const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
       let resp;
+      try {
       if (files.length) {
         const fd = new FormData();
         for (const [k, v] of Object.entries(fields)) if (v !== null) fd.append(k, v);
@@ -1280,8 +1327,23 @@
       } else {
         resp = await postJSON(agent ? '/agent/send/' : '/send/', fields);
       }
+      if (!resp.ok) throw new Error(resp.status === 403 ? 'Session expired or CSRF failed (403) — reload the page'
+                                                        : `Server error ${resp.status}`);
       await consume(resp, ctx);
+      } catch (e) {
+        ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message);
+      }
       busy = false;   // stream closed, even if [DONE] never arrived
+      if (!ctx.errored) finishStatus(ctx);
+    }
+
+    // called when a stream ends: say what state we ended in
+    function finishStatus(ctx) {
+      if (ctx.waiting) return;                       // waiting for the user's approval
+      if (ctx.errored) return;
+      if (!ctx.sawDone) ctx.setStatus('error', 'Connection dropped before the reply finished');
+      else if (!ctx.gotText) ctx.setStatus('waiting', 'Finished, but the model returned no text');
+      else ctx.setStatus('done', 'Done');
     }
 
     function postJSON(url, body) {
@@ -1308,7 +1370,15 @@
       const decide = async (approve, always) => {
         card.classList.add('done'); card.querySelectorAll('button').forEach(b => b.disabled = true);
         busy = true; sendBtn.disabled = true; ctx.waiting = false;
-        await consume(await postJSON('/agent/approve/', {run_id: ev.run_id, approve, always}), ctx);
+        try {
+          const r = await postJSON('/agent/approve/', {run_id: ev.run_id, approve, always});
+          if (!r.ok) throw new Error(`Server error ${r.status}`);
+          ctx.setStatus('working', approve ? 'Running approved tool…' : 'Continuing without it…');
+          await consume(r, ctx);
+          finishStatus(ctx);
+        } catch (e) {
+          ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message);
+        }
         busy = false;
       };
       for (const [label, ap, al] of [['Allow', true, false], ['Always allow this tool', true, true], ['Deny', false, false]]) {
@@ -1321,6 +1391,7 @@
     // reads one SSE stream into the bubble described by ctx
     async function consume(resp, ctx) {
       const {thinkBox, tools, answer} = ctx;
+      ctx.sawDone = false;
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';  // holds a partial line until the rest arrives
@@ -1335,21 +1406,26 @@
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6);
-          if (payload === '[DONE]') {sendBtn.disabled = ctx.waiting; busy = ctx.waiting; break;}
+          if (payload === '[DONE]') {ctx.sawDone = true;sendBtn.disabled = ctx.waiting; busy = ctx.waiting; break;}
 
           const data = JSON.parse(payload);
+          if (data.error) {ctx.errored = true; ctx.setStatus('error', 'Error: ' + data.error);}
+          if (data.step) {ctx.step = data.step; ctx.setStatus('working', `Step ${data.step} · waiting for model…`);}
           if (data.chat_id) {
+            if (!ctx.step) ctx.setStatus('working', 'Waiting for model…');
             // first message of a new chat: add it to the sidebar
             if (currentChatId === null) addHistoryItem(data.chat_id, ctx.text.slice(0, 60));
             currentChatId = data.chat_id;
             setActive(currentChatId);
           }
           if (data.thinking) {
+            if (!ctx.errored) ctx.setStatus('working', 'Thinking…');
             thinkBox.hidden = false; thinkBox.open = true;
             ctx.thinkText += data.thinking;
             thinkBox.lastChild.textContent = ctx.thinkText;
           }
           if (data.tool) {
+            ctx.setStatus('working', 'Using ' + data.tool.name + '…');
             const chip = document.createElement('div');
             chip.className = 'chip';
             const icons = {web_search: '🔍 Searching: ', fetch_page: '📄 Reading: ', run_python: '🐍 Python: ',
@@ -1359,12 +1435,15 @@
             tools.append(chip);
           }
           if (data.result) {
+            ctx.setStatus('working', 'Reading the tool result…');
             const r = document.createElement('div'); r.className = 'result';
             r.textContent = data.result.out; tools.append(r);
           }
           if (data.artifact) tools.append(artifactFrame(data.artifact));
-          if (data.approval) {tools.append(approvalCard(data.approval, ctx)); ctx.waiting = true;}
+          if (data.approval) {
+            ctx.setStatus('waiting', 'Waiting for your approval');tools.append(approvalCard(data.approval, ctx)); ctx.waiting = true;}
           if (data.token) {
+            ctx.gotText = true; if (!ctx.errored) ctx.setStatus('working', 'Writing…');
             if (!ctx.thinkDone) {
               ctx.thinkDone = true;
               thinkBox.open = false;
@@ -1384,8 +1463,8 @@
       row.className = 'message-row';
       row.innerHTML = `
           <div class="msg-meta">
-              <div class="msg-avatar ai">C</div>
-              ai
+              <div class="msg-avatar ai working">${AI_ICON}</div>
+              ai <span class="status working"></span>
           </div>
           <div class="msg-bubble ai"></div>
       `;
