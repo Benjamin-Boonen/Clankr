@@ -38,3 +38,11 @@ class Artifact(models.Model):
     kind = models.CharField(max_length=10)      # html | svg | markdown
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Attachment(models.Model):
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='attachments')
+    name = models.CharField(max_length=255)
+    kind = models.CharField(max_length=10)       # text | pdf | image
+    text = models.TextField(blank=True)
+    image_b64 = models.TextField(blank=True)

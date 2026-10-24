@@ -35,7 +35,7 @@ TOOLS = [
 AGENT_PROMPT = (
     "\nYou are in AGENT MODE. Work autonomously on the user's task: plan briefly, call tools, "
     "inspect results, fix mistakes, repeat. Prefer run_python for computation. Use create_artifact for "
-    "deliverables (load_skill first for html/report/diagram). Some tools ask the user for permission; "
+    "deliverables (load_skill first for html/report/diagram). User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
     "if denied, adapt. When completely done, call finish(summary). Never write tool calls as text."
 )
 
@@ -43,6 +43,15 @@ def workspace(chat_id):
     p = Path(settings.BASE_DIR) / "agent_workspaces" / str(chat_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+def copy_to_workspace(chat_id, message):
+    """Put text/pdf attachments in the workspace as files (pdf as extracted .txt)."""
+    ws = workspace(chat_id)
+    for a in message.attachments.all():
+        if a.kind == "image": continue
+        name = os.path.basename(a.name) + (".txt" if a.kind == "pdf" else "")
+        (ws / name).write_text(a.text)
+
 
 def _safe(ws, rel):
     p = (ws / rel).resolve()

@@ -431,6 +431,11 @@
       margin-bottom: 0;
     }
 
+    .attach-btn {background:none;border:none;cursor:pointer;font-size:1.1rem;opacity:.7;padding:0 .4rem}
+    .attach-btn:hover {opacity:1}
+    .file-chips {display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.4rem}
+    .file-chips span {font-size:.75rem;border:1px solid rgba(128,128,128,.5);border-radius:999px;padding:.1rem .6rem;cursor:pointer}
+    .file-chips span:hover {text-decoration:line-through}
     .agent-toggle {margin-left:.75rem;font-size:.8rem;cursor:pointer;user-select:none;opacity:.85}
     .agent-toggle input {accent-color: var(--accent, #7c9);margin-right:.25rem}
     .approval {border:1px solid var(--accent, #7c9);border-radius:10px;padding:.6rem .8rem;margin:.5rem 0;font-size:.85rem}
@@ -1005,9 +1010,14 @@
 
       <!-- input -->
       <div class="input-area">
+        <div id="fileChips" class="file-chips"></div>
         <div class="input-box">
           <textarea id="msgInput" placeholder="Message Clank.r…" rows="1" onkeydown="handleKey(event)"
             oninput="autoResize(this)"></textarea>
+          <button class="attach-btn" type="button" title="Attach files (code, text, PDF, images)"
+            onclick="document.getElementById('fileInput').click()">📎</button>
+          <input type="file" id="fileInput" multiple hidden
+            accept=".txt,.md,.py,.js,.ts,.html,.css,.json,.csv,.c,.cpp,.h,.java,.rs,.go,.sh,.yml,.yaml,.toml,.tex,.sql,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*">
           <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="12" y1="19" x2="12" y2="5" />
@@ -1072,6 +1082,20 @@
     const defaultSel = document.getElementById('defaultModel');
     const userInitial = "{{ user.username|first|upper|escapejs }}";
     let currentChatId = null;
+    let pendingFiles = [];
+    const fileInput = document.getElementById('fileInput');
+    function renderChips() {
+      const box = document.getElementById('fileChips'); box.innerHTML = '';
+      pendingFiles.forEach((f, i) => {
+        const c = document.createElement('span'); c.textContent = '📎 ' + f.name + ' ✕';
+        c.title = 'Remove'; c.onclick = () => {pendingFiles.splice(i, 1); renderChips(); updateSend();};
+        box.append(c);
+      });
+    }
+    function updateSend() {sendBtn.disabled = busy || (!input.value.trim() && !pendingFiles.length);}
+    fileInput.addEventListener('change', () => {
+      pendingFiles.push(...fileInput.files); fileInput.value = ''; renderChips(); updateSend();
+    });
     let busy = false;   // true while a reply is streaming
 
     // ─── default model (remembered in this browser) ───
@@ -1139,7 +1163,7 @@
       const data = await resp.json();
 
       msgs.innerHTML = '';
-      data.messages.forEach(m => addMessage(m.content, m.role === 'user' ? 'user' : 'ai'));
+      data.messages.forEach(m => addMessage(m.content + (m.files && m.files.length ? '\n\n📎 ' + m.files.join(', ') : ''), m.role === 'user' ? 'user' : 'ai'));
       (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
       currentChatId = data.id;
       setActive(data.id);
@@ -1147,7 +1171,7 @@
     }
 
     input.addEventListener('input', () => {
-      sendBtn.disabled = input.value.trim() === '';
+      updateSend();
     });
 
     function autoResize(el) {
@@ -1221,10 +1245,12 @@
     }
 
     async function sendMessage() {
-      const text = input.value.trim();
+      const text = input.value.trim() || (pendingFiles.length ? 'See the attached file(s).' : '');
       if (!text) return;
 
-      addMessage(text, 'user');
+      const files = pendingFiles;
+      pendingFiles = []; renderChips();
+      addMessage(text + (files.length ? '\n\n📎 ' + files.map(f => f.name).join(', ') : ''), 'user');
       input.value = '';
       autoResize(input);
       sendBtn.disabled = true;
@@ -1243,9 +1269,18 @@
 
       const ctx = {thinkBox, tools, answer, text, raw: '', thinkDone: false, thinkText: '', waiting: false};
       const agent = document.getElementById('agentMode').checked;
-      await consume(await postJSON(agent ? '/agent/send/' : '/send/', {
-        content: text, model: modelSel.value, chat_id: currentChatId
-      }), ctx);
+      const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
+      let resp;
+      if (files.length) {
+        const fd = new FormData();
+        for (const [k, v] of Object.entries(fields)) if (v !== null) fd.append(k, v);
+        files.forEach(f => fd.append('files', f));
+        resp = await fetch(agent ? '/agent/send/' : '/send/',
+                           {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body: fd});
+      } else {
+        resp = await postJSON(agent ? '/agent/send/' : '/send/', fields);
+      }
+      await consume(resp, ctx);
       busy = false;   // stream closed, even if [DONE] never arrived
     }
 

@@ -5,9 +5,16 @@ from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.http import require_POST
 from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message, AgentRun, Artifact
-from . import agent
+from . import agent, files
 from django.http import HttpResponse
 from . import ollama
+
+
+def _parse(request):
+    """JSON body, or multipart form (text fields + 'files')."""
+    if request.content_type and request.content_type.startswith('multipart'):
+        return request.POST.dict(), request.FILES.getlist('files')
+    return json.loads(request.body), []
 
 
 @login_required
@@ -19,14 +26,16 @@ def index(request):
 @login_required
 def get_chat(request, chat_id):
     chat = get_object_or_404(Chat, id=chat_id, user=request.user)
-    messages = list(chat.messages.values('role', 'content', 'created_at'))
+    messages = [{'role': m.role, 'content': m.content, 'created_at': m.created_at,
+                 'files': [a.name for a in m.attachments.all()]}
+                for m in chat.messages.prefetch_related('attachments')]
     arts = list(chat.artifacts.values('id', 'title', 'kind'))
     return JsonResponse({'id': chat.id, 'title': chat.title, 'messages': messages, 'artifacts': arts})
 
 @login_required
 @require_POST
 def send_message(request):
-    data    = json.loads(request.body)
+    data, uploads = _parse(request)
     content = data['content']
     model   = data.get('model', 'llama3')
     chat_id = data.get('chat_id')
@@ -36,19 +45,17 @@ def send_message(request):
     else:
         chat = Chat.objects.create(user=request.user, title=content[:60])
 
-    Message.objects.create(chat=chat, role='user', content=content)
-
-    # only real conversation goes to the model (ignores old 'web-search' rows)
-    history = [
-        {'role': 'assistant' if m.role == 'ai' else 'user', 'content': m.content}
-        for m in chat.messages.filter(role__in=['user', 'ai'])
-    ]
+    msg = Message.objects.create(chat=chat, role='user', content=content)
+    upload_errors = files.save_attachments(msg, uploads)
+    history = files.build_history(chat, ollama.get_caps(model))
 
     full_reply = []
 
     def stream():
         # first chunk: send the chat_id so the frontend knows which chat this is
         yield f"data: {json.dumps({'chat_id': chat.id})}\n\n"
+        if upload_errors:
+            yield f"data: {json.dumps({'token': '> ⚠️ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
 
         # kind is 'token', 'thinking' or 'tool'; only the answer is saved
         for kind, value in ollama.chat_stream(model=model, messages=history):
@@ -79,17 +86,22 @@ def _agent_stream(run, chat, gen, prefix_events=()):
 @login_required
 @require_POST
 def agent_send(request):
-    data = json.loads(request.body)
+    data, uploads = _parse(request)
     content, model = data['content'], data.get('model', 'llama3')
     if data.get('chat_id'):
         chat = get_object_or_404(Chat, id=data['chat_id'], user=request.user)
     else:
         chat = Chat.objects.create(user=request.user, title=content[:60])
-    Message.objects.create(chat=chat, role='user', content=content)
-    history = [{'role': 'assistant' if m.role == 'ai' else 'user', 'content': m.content}
-               for m in chat.messages.filter(role__in=['user', 'ai'])]
+    msg = Message.objects.create(chat=chat, role='user', content=content)
+    upload_errors = files.save_attachments(msg, uploads)
+    agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
+    history = files.build_history(chat, ollama.get_caps(model))
     run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
-    return _agent_stream(run, chat, agent.drive(run, model))
+    def gen():
+        if upload_errors:
+            yield 'token', '> ⚠️ ' + '; '.join(upload_errors) + '\n\n'
+        yield from agent.drive(run, model)
+    return _agent_stream(run, chat, gen())
 
 @login_required
 @require_POST
