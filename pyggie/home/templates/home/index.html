@@ -360,7 +360,7 @@
     .msg-avatar.ai .spin {opacity: 0}
     .msg-avatar.ai.working .spin, .msg-avatar.ai.waiting .spin {opacity: .55}
     .msg-avatar.ai.working {animation: pulse 1.4s ease-in-out infinite}
-    .msg-avatar.ai.working .spin {transform-origin: 12px 12px; animation: spin 1.1s linear infinite}
+    .msg-avatar.ai.working .spin {transform-box: fill-box; transform-origin: center; animation: spin 1.1s linear infinite}
     .msg-avatar.ai.error {color: #e5645b; border-color: #e5645b}
     .msg-avatar.ai.waiting {color: #e0b04a; border-color: #e0b04a}
     .status {font-size: 11.5px; color: var(--muted)}
