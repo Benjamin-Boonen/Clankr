@@ -1,0 +1,67 @@
+diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
+index 8c02a04..049cdfa 100644
+--- a/pyggie/home/templates/home/index.html
++++ b/pyggie/home/templates/home/index.html
+@@ -33,25 +33,25 @@
+     }
+ 
+     :root {
+-      --bg: hsl(var(--hue) 14% 5.5%);
+-      --surface: hsl(var(--hue) 14% 8.5%);
+-      --surface2: hsl(var(--hue) 13% 11.5%);
+-      --border: hsl(var(--hue) 30% 90% / 0.08);
+-      --border2: hsl(var(--hue) 30% 90% / 0.15);
+-      --text: hsl(var(--hue) 15% 91%);
+-      --muted: hsl(var(--hue) 10% 52%);
++      --bg: hsl(var(--hue) 24% 4.5%);
++      --surface: hsl(var(--hue) 24% 8.5%);
++      --surface2: hsl(var(--hue) 24% 12.5%);
++      --border: hsl(var(--hue) 45% 80% / 0.16);
++      --border2: hsl(var(--hue) 45% 80% / 0.30);
++      --text: hsl(var(--hue) 20% 96%);
++      --muted: hsl(var(--hue) 16% 70%);
+       /* theme: everything coloured is derived from one hue (0-360) */
+       --hue: 100;
+-      --accent: hsl(var(--hue) 37% 66%);
+-      --accent2: hsl(var(--hue) 37% 48%);
+-      --accent-a08: hsl(var(--hue) 37% 66% / 0.08);
+-      --accent-a15: hsl(var(--hue) 37% 66% / 0.15);
+-      --accent-a40: hsl(var(--hue) 37% 66% / 0.4);
+-      --user-bg: hsl(var(--hue) 28% 13.5%);
+-      --user-brd: hsl(var(--hue) 37% 66% / 0.2);
+-      --usermsg-bg: hsl(var(--hue) 38% 16%);
+-      --usermsg-brd: hsl(var(--hue) 37% 66% / 0.32);
+-      --ai-bg: hsl(var(--hue) 14% 8.8%);
++      --accent: hsl(var(--hue) 60% 68%);
++      --accent2: hsl(var(--hue) 60% 50%);
++      --accent-a08: hsl(var(--hue) 60% 68% / 0.12);
++      --accent-a15: hsl(var(--hue) 60% 68% / 0.22);
++      --accent-a40: hsl(var(--hue) 60% 68% / 0.6);
++      --user-bg: hsl(var(--hue) 40% 15%);
++      --user-brd: hsl(var(--hue) 60% 68% / 0.35);
++      --usermsg-bg: hsl(var(--hue) 55% 21%);
++      --usermsg-brd: hsl(var(--hue) 60% 68% / 0.55);
++      --ai-bg: hsl(var(--hue) 24% 9.5%);
+       --radius: 12px;
+       --font-body: 'DM Sans', sans-serif;
+       --font-mono: 'DM Mono', monospace;
+@@ -840,7 +840,7 @@
+       height: 26px;
+       border-radius: 50%;
+       border: 2px solid transparent;
+-      background: hsl(var(--sw) 37% 56%);
++      background: hsl(var(--sw) 60% 58%);
+       cursor: pointer;
+       transition: transform 0.1s, border-color 0.15s;
+     }
+@@ -861,8 +861,8 @@
+       border-radius: 4px;
+       outline: none;
+       background: linear-gradient(to right,
+-          hsl(0 37% 56%), hsl(60 37% 56%), hsl(120 37% 56%),
+-          hsl(180 37% 56%), hsl(240 37% 56%), hsl(300 37% 56%), hsl(360 37% 56%));
++          hsl(0 60% 58%), hsl(60 60% 58%), hsl(120 60% 58%),
++          hsl(180 60% 58%), hsl(240 60% 58%), hsl(300 60% 58%), hsl(360 60% 58%));
+     }
+ 
+     #hueSlider::-webkit-slider-thumb {
