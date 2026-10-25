@@ -445,6 +445,13 @@
       display: none;
     }
 
+    /* the reply body in arrival order: thinking, tool calls, text, repeat */
+    .stream {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
     .ai-body .answer> :first-child {
       margin-top: 0;
     }
@@ -1681,17 +1688,14 @@
       // create an empty AI body to stream into
       const body = addEmptyAiBubble();
 
-      // the body has three parts: thinking box, tool notices, answer
-      const thinkBox = document.createElement('details');
-      thinkBox.className = 'think'; thinkBox.hidden = true;
-      thinkBox.innerHTML = '<summary>Thinking…</summary><div></div>';
-      const tools = document.createElement('div'); tools.className = 'tools';
-      const answer = document.createElement('div'); answer.className = 'answer';
-      body.append(thinkBox, tools, answer);
+      // one ordered stream: thinking, tool calls, artifacts and answer text
+      // appear in the same order the server sends them
+      const stream = document.createElement('div'); stream.className = 'stream';
+      body.append(stream);
 
       const setStatus = makeStatus(body);
       setStatus('working', 'Sending', 'orbit');
-      const ctx = {setStatus, step: 0, gotText: false, errored: false, thinkBox, tools, answer, text, raw: '', thinkDone: false, thinkText: '', waiting: false, liveTool: null};
+      const ctx = {setStatus, step: 0, gotText: false, errored: false, stream, seg: null, segKind: null, text, answerRaw: '', thinkText: '', waiting: false, liveTool: null};
       const agent = document.getElementById('agentMode').checked;
       const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
       let resp;
@@ -1793,9 +1797,43 @@
       s.classList.toggle('err', !!err);
     }
 
+    // ordered-stream helpers: the current thinking/answer block stays open only
+    // until something else arrives after it, so later text lands below earlier tools
+    function closeThink(ctx) {
+      if (ctx.segKind === 'think' && ctx.seg) {
+        ctx.seg.open = false;
+        ctx.seg.firstChild.textContent = 'Thought';
+      }
+    }
+
+    function openSegment(ctx, kind) {
+      if (ctx.segKind === kind && ctx.seg) return ctx.seg;
+      closeThink(ctx);
+      if (kind === 'think') {
+        ctx.seg = document.createElement('details');
+        ctx.seg.className = 'think';
+        ctx.seg.innerHTML = '<summary>Thinking…</summary><div></div>';
+        ctx.seg.open = true;
+        ctx.thinkText = '';
+      } else {
+        ctx.seg = document.createElement('div');
+        ctx.seg.className = 'answer';
+        ctx.answerRaw = '';
+      }
+      ctx.segKind = kind;
+      ctx.stream.append(ctx.seg);
+      return ctx.seg;
+    }
+
+    // appends a tool notice, artifact or approval card where it happened
+    function appendTool(ctx, el) {
+      closeThink(ctx);
+      ctx.segKind = 'tool'; ctx.seg = null;
+      ctx.stream.append(el);
+    }
+
     // reads one SSE stream into the AI body described by ctx
     async function consume(resp, ctx) {
-      const {thinkBox, tools, answer} = ctx;
       ctx.sawDone = false;
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -1825,9 +1863,9 @@
           }
           if (data.thinking) {
             if (!ctx.errored) ctx.setStatus('working', 'Thinking', 'orbit');
-            thinkBox.hidden = false; thinkBox.open = true;
+            const d = openSegment(ctx, 'think');
             ctx.thinkText += data.thinking;
-            thinkBox.lastChild.textContent = ctx.thinkText;
+            d.lastChild.textContent = ctx.thinkText;
           }
           if (data.tool_arg) {
             // the model is typing a tool call — show the code as it streams in
@@ -1835,7 +1873,7 @@
             if (!ctx.liveTool || ctx.liveTool.dataset.name !== data.tool_arg.name) {
               ctx.liveTool = makeToolNotice({name: data.tool_arg.name, arg: ''});
               ctx.liveTool.open = true;          // open while typing so the code is visible
-              tools.append(ctx.liveTool);
+              appendTool(ctx, ctx.liveTool);
             }
             ctx.liveTool.querySelector('.tn-code code').textContent += data.tool_arg.delta;
           }
@@ -1845,7 +1883,7 @@
               ctx.liveTool.querySelector('.tn-code code').textContent = String(data.tool.arg || '');
             } else {
               ctx.liveTool = makeToolNotice(data.tool);
-              tools.append(ctx.liveTool);
+              appendTool(ctx, ctx.liveTool);
             }
           }
           if (data.result) {
@@ -1857,25 +1895,23 @@
               ctx.liveTool = null;
             }
           }
-          if (data.artifact) tools.append(artifactFrame(data.artifact));
+          if (data.artifact) appendTool(ctx, artifactFrame(data.artifact));
           if (data.approval) {
-            ctx.setStatus('waiting', 'Waiting for your approval', 'wait');tools.append(approvalCard(data.approval, ctx)); ctx.waiting = true;}
+            ctx.setStatus('waiting', 'Waiting for your approval', 'wait');
+            appendTool(ctx, approvalCard(data.approval, ctx)); ctx.waiting = true;}
           if (data.token) {
             ctx.gotText = true; if (!ctx.errored) ctx.setStatus('working', 'Writing', 'orbit');
-            if (!ctx.thinkDone) {
-              ctx.thinkDone = true;
-              thinkBox.open = false;
-              thinkBox.firstChild.textContent = 'Thought';
-            }
-            ctx.raw += data.token;
-            answer.innerHTML = renderMarkdown(ctx.raw);
-            enhanceCode(answer);
+            const a = openSegment(ctx, 'answer');   // also collapses the thinking block above it
+            ctx.answerRaw += data.token;
+            a.innerHTML = renderMarkdown(ctx.answerRaw);
+            enhanceCode(a);
           }
           if (data.done && data.done.summary && !ctx.gotText) {
             ctx.gotText = true;
-            ctx.raw += (ctx.raw ? '\n\n' : '') + '**Done:** ' + data.done.summary;
-            answer.innerHTML = renderMarkdown(ctx.raw);
-            enhanceCode(answer);
+            const a = openSegment(ctx, 'answer');
+            ctx.answerRaw += (ctx.answerRaw ? '\n\n' : '') + '**Done:** ' + data.done.summary;
+            a.innerHTML = renderMarkdown(ctx.answerRaw);
+            enhanceCode(a);
           }
 
           scrollToBottom(false);   // only follows if you're already near the bottom
