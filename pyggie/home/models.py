@@ -30,6 +30,9 @@ class AgentRun(models.Model):
     allowed = models.JSONField(default=list)    # tools the user said "always allow" for this run
     steps = models.IntegerField(default=0)
     status = models.CharField(max_length=10, default='running')
+    # per-run working state set while the agent runs (not stored in the database)
+    summary = ''      # the finish() summary; empty until the model calls finish
+    done = False      # set when the run has finished
 
 
 class Artifact(models.Model):

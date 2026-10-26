@@ -73,7 +73,26 @@
       grid-template-columns: 240px 1fr;
       grid-template-rows: 100vh;
       height: 100vh;
+      transition: grid-template-columns .2s ease;
     }
+
+    /* collapsed sidebar: the column closes and the sidebar is hidden from view and focus */
+    .shell.collapsed {grid-template-columns: 0 1fr}
+    .shell.collapsed .sidebar {visibility: hidden; border-right: none}
+    .sidebar {min-width: 0}
+
+    .sidebar-toggle {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      padding: 6px;
+      margin-right: 12px;
+      border-radius: 6px;
+    }
+
+    .sidebar-toggle:hover {color: var(--accent)}
 
     /* ─── sidebar ─── */
     .sidebar {
@@ -427,6 +446,8 @@
       cursor: pointer;
     }
 
+    .think .tool-notice {margin-top: 6px}
+
     .think div {
       white-space: pre-wrap;
       margin-top: 6px;
@@ -765,6 +786,10 @@
       transform: scale(0.94);
     }
 
+    .send-btn[hidden] {display: none}
+    .stop-btn {background: var(--surface2); color: var(--accent)}
+    .stop-btn:hover {background: var(--user-bg)}
+
     .send-btn:disabled {
       background: var(--surface2);
       color: var(--muted);
@@ -1089,7 +1114,7 @@
 
 <body>
 
-  <div class="shell">
+  <div class="shell" id="shell">
 
     <!-- sidebar -->
     <aside class="sidebar">
@@ -1134,6 +1159,11 @@
         Latest
       </button>
       <div class="topbar">
+        <button class="sidebar-toggle" onclick="toggleSidebar()" aria-controls="shell" aria-expanded="true" title="Show or hide the sidebar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" />
+          </svg>
+        </button>
         <div class="model-badge">
           <div class="dot"></div>
           <select id="modelSelect">
@@ -1213,6 +1243,9 @@
             onclick="document.getElementById('fileInput').click()">📎</button>
           <input type="file" id="fileInput" multiple hidden
             accept=".txt,.md,.py,.js,.ts,.html,.css,.json,.csv,.c,.cpp,.h,.java,.rs,.go,.sh,.yml,.yaml,.toml,.tex,.sql,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*">
+          <button class="send-btn stop-btn" id="stopBtn" type="button" onclick="stopReply()" title="Stop" hidden>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          </button>
           <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="12" y1="19" x2="12" y2="5" />
@@ -1336,6 +1369,7 @@
   <script>
     const input = document.getElementById('msgInput');
     const sendBtn = document.getElementById('sendBtn');
+    const stopBtn = document.getElementById('stopBtn');
     const msgs = document.getElementById('messages');
     const empty = document.getElementById('emptyState');
     const historyList = document.getElementById('historyList');
@@ -1358,6 +1392,9 @@
       pendingFiles.push(...fileInput.files); fileInput.value = ''; renderChips(); updateSend();
     });
     let busy = false;   // true while a reply is streaming
+    let activeCtx = null, activeAbort = null;   // the reply in progress, and its browser-side abort
+    // busy also swaps the send button for stop
+    function setBusy(v) { busy = v; stopBtn.hidden = !v; sendBtn.hidden = v; }
 
     // ─── default model (remembered in this browser) ───
     defaultSel.innerHTML = modelSel.innerHTML;
@@ -1424,6 +1461,19 @@
       el.textContent = title || 'Untitled';
       historyList.prepend(el);
     }
+
+    // ─── sidebar collapse (remembered per browser) ───
+    function setSidebar(collapsed) {
+      document.getElementById('shell').classList.toggle('collapsed', collapsed);
+      document.querySelector('.sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
+      try { localStorage.setItem('clankr.sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    }
+
+    function toggleSidebar() {
+      setSidebar(!document.getElementById('shell').classList.contains('collapsed'));
+    }
+
+    try { setSidebar(localStorage.getItem('clankr.sidebarCollapsed') === '1'); } catch (e) {}
 
     historyList.addEventListener('click', e => {
       const item = e.target.closest('.history-item');
@@ -1674,6 +1724,7 @@
     }
 
     async function sendMessage() {
+      if (busy) return;
       const text = input.value.trim() || (pendingFiles.length ? 'See the attached file(s).' : '');
       if (!text) return;
 
@@ -1683,10 +1734,11 @@
       input.value = '';
       autoResize(input);
       sendBtn.disabled = true;
-      busy = true;
+      setBusy(true);
 
       // create an empty AI body to stream into
       const body = addEmptyAiBubble();
+      if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 
       // one ordered stream: thinking, tool calls, artifacts and answer text
       // appear in the same order the server sends them
@@ -1695,7 +1747,9 @@
 
       const setStatus = makeStatus(body);
       setStatus('working', 'Sending', 'orbit');
-      const ctx = {setStatus, step: 0, gotText: false, errored: false, stream, seg: null, segKind: null, text, answerRaw: '', thinkText: '', waiting: false, liveTool: null};
+      const ctx = {setStatus, step: 0, gotText: false, errored: false, stream, seg: null, segKind: null, chain: null, thinkTail: null, text, answerRaw: '', replyText: '', waiting: false, liveTool: null, stopped: false};
+      const abort = new AbortController();
+      activeCtx = ctx; activeAbort = abort;
       const agent = document.getElementById('agentMode').checked;
       const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
       let resp;
@@ -1705,18 +1759,41 @@
         for (const [k, v] of Object.entries(fields)) if (v !== null) fd.append(k, v);
         files.forEach(f => fd.append('files', f));
         resp = await fetch(agent ? '/agent/send/' : '/send/',
-                           {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body: fd});
+                           {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body: fd, signal: abort.signal});
       } else {
-        resp = await postJSON(agent ? '/agent/send/' : '/send/', fields);
+        resp = await postJSON(agent ? '/agent/send/' : '/send/', fields, abort.signal);
       }
       if (!resp.ok) throw new Error(resp.status === 403 ? 'Session expired or CSRF failed (403) — reload the page'
                                                         : `Server error ${resp.status}`);
       await consume(resp, ctx);
       } catch (e) {
-        ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message);
+        // a stop aborts the browser's read; that is not an error
+        if (!ctx.stopped) { ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message); }
       }
-      busy = false;   // stream closed, even if [DONE] never arrived
-      if (!ctx.errored) finishStatus(ctx);
+      setBusy(false);   // stream closed, even if [DONE] never arrived
+      activeCtx = null; activeAbort = null;
+      if (ctx.stopped) ctx.setStatus('done', 'Stopped');
+      else if (!ctx.errored) finishStatus(ctx);
+    }
+
+    // stop the reply in progress: the browser stops reading now, and the server
+    // is told to stop generating and keep what was written so far
+    function stopReply() {
+      if (!busy) return;
+      const ctx = activeCtx;
+      if (ctx) ctx.stopped = true;
+      if (currentChatId) {
+        fetch('/stop/', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
+                         body: JSON.stringify({chat_id: currentChatId})}).catch(() => {});
+      }
+      if (activeAbort) {
+        activeAbort.abort();
+      } else {
+        // waiting for approval: no stream is open, so finish the turn here
+        document.querySelectorAll('.approval').forEach(c => {c.classList.add('done'); c.querySelectorAll('button').forEach(b => b.disabled = true);});
+        setBusy(false);
+        if (ctx) { ctx.waiting = false; ctx.setStatus('done', 'Stopped'); }
+      }
     }
 
     // called when a stream ends: say what state we ended in
@@ -1728,13 +1805,23 @@
       // finished (if unsatisfying) turn, so the swarm dissolves like any done
       else if (!ctx.gotText) ctx.setStatus('done', 'Finished, but the model returned no text', 'done');
       else ctx.setStatus('done', 'Done');
+      if (ctx.sawDone) notifyDone(ctx);
     }
 
-    function postJSON(url, body) {
+    // send a desktop notification when a reply finishes while Clank.r is in the background
+    function notifyDone(ctx) {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      if (document.visibilityState === 'visible' && document.hasFocus()) return;
+      const preview = (ctx.replyText || 'Your reply is ready.').replace(/\s+/g, ' ').trim().slice(0, 140);
+      const n = new Notification('Clank.r', {body: preview, tag: 'clankr-reply'});
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+
+    function postJSON(url, body, signal) {
       return fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
-        body: JSON.stringify(body)
+        body: JSON.stringify(body), signal
       });
     }
 
@@ -1753,7 +1840,7 @@
       card.innerHTML = `<b>Permission needed:</b> <code>${escHtml(ev.name)}</code><pre>${escHtml(String(arg))}</pre>`;
       const decide = async (approve, always) => {
         card.classList.add('done'); card.querySelectorAll('button').forEach(b => b.disabled = true);
-        busy = true; sendBtn.disabled = true; ctx.waiting = false;
+        setBusy(true); sendBtn.disabled = true; ctx.waiting = false;
         try {
           const r = await postJSON('/agent/approve/', {run_id: ev.run_id, approve, always});
           if (!r.ok) throw new Error(`Server error ${r.status}`);
@@ -1766,7 +1853,7 @@
         } catch (e) {
           ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message);
         }
-        busy = false;
+        setBusy(false);
       };
       for (const [label, ap, al] of [['Allow', true, false], ['Always allow this tool', true, true], ['Deny', false, false]]) {
         const b = document.createElement('button'); b.textContent = label;
@@ -1797,39 +1884,62 @@
       s.classList.toggle('err', !!err);
     }
 
-    // ordered-stream helpers: the current thinking/answer block stays open only
-    // until something else arrives after it, so later text lands below earlier tools
+    // Ordered stream. Thinking and the tool calls made while thinking share one
+    // collapsible "chain", in the order they happened (think → tool → think ...).
+    // The chain closes to "Thought" once the answer text starts. Artifacts and
+    // approval cards are full-width blocks in the stream, so they close the chain.
     function closeThink(ctx) {
-      if (ctx.segKind === 'think' && ctx.seg) {
-        ctx.seg.open = false;
-        ctx.seg.firstChild.textContent = 'Thought';
+      if (ctx.chain) {
+        ctx.chain.open = false;
+        ctx.chain.firstChild.textContent = 'Thought';
+        ctx.chain = null; ctx.thinkTail = null;
       }
     }
 
-    function openSegment(ctx, kind) {
-      if (ctx.segKind === kind && ctx.seg) return ctx.seg;
-      closeThink(ctx);
-      if (kind === 'think') {
-        ctx.seg = document.createElement('details');
-        ctx.seg.className = 'think';
-        ctx.seg.innerHTML = '<summary>Thinking…</summary><div></div>';
-        ctx.seg.open = true;
-        ctx.thinkText = '';
-      } else {
-        ctx.seg = document.createElement('div');
-        ctx.seg.className = 'answer';
-        ctx.answerRaw = '';
+    function chainFor(ctx) {
+      if (!ctx.chain) {
+        ctx.chain = document.createElement('details');
+        ctx.chain.className = 'think';
+        ctx.chain.innerHTML = '<summary>Thinking…</summary>';
+        ctx.chain.open = true;
+        ctx.thinkTail = null;
+        ctx.stream.append(ctx.chain);
       }
-      ctx.segKind = kind;
+      return ctx.chain;
+    }
+
+    // thinking text: appended to the chain, continuing the current text piece
+    function addThinking(ctx, text) {
+      const chain = chainFor(ctx);
+      if (!ctx.thinkTail) { ctx.thinkTail = document.createElement('div'); chain.append(ctx.thinkTail); }
+      ctx.thinkTail.textContent += text;
+      ctx.segKind = 'think';
+    }
+
+    // a tool call sits in the chain, where the thinking that led to it is
+    function addToolNotice(ctx, el) {
+      chainFor(ctx).append(el);
+      ctx.thinkTail = null;          // thinking after the tool starts a new piece below it
+      ctx.segKind = 'think';
+    }
+
+    // artifacts and approval cards: full-width blocks in the stream
+    function appendBlock(ctx, el) {
+      closeThink(ctx);
+      ctx.segKind = 'block'; ctx.seg = null;
+      ctx.stream.append(el);
+    }
+
+    // the answer: a new block whenever something else came after the last one
+    function answerBlock(ctx) {
+      if (ctx.segKind === 'answer' && ctx.seg) return ctx.seg;
+      closeThink(ctx);
+      ctx.seg = document.createElement('div');
+      ctx.seg.className = 'answer';
+      ctx.answerRaw = '';
+      ctx.segKind = 'answer';
       ctx.stream.append(ctx.seg);
       return ctx.seg;
-    }
-
-    // appends a tool notice, artifact or approval card where it happened
-    function appendTool(ctx, el) {
-      closeThink(ctx);
-      ctx.segKind = 'tool'; ctx.seg = null;
-      ctx.stream.append(el);
     }
 
     // reads one SSE stream into the AI body described by ctx
@@ -1849,7 +1959,7 @@
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6);
-          if (payload === '[DONE]') {ctx.sawDone = true;sendBtn.disabled = ctx.waiting; busy = ctx.waiting; break;}
+          if (payload === '[DONE]') {ctx.sawDone = true;sendBtn.disabled = ctx.waiting; setBusy(ctx.waiting); break;}
 
           const data = JSON.parse(payload);
           if (data.error) {ctx.errored = true; ctx.setStatus('error', 'Error: ' + data.error);}
@@ -1863,9 +1973,7 @@
           }
           if (data.thinking) {
             if (!ctx.errored) ctx.setStatus('working', 'Thinking', 'orbit');
-            const d = openSegment(ctx, 'think');
-            ctx.thinkText += data.thinking;
-            d.lastChild.textContent = ctx.thinkText;
+            addThinking(ctx, data.thinking);
           }
           if (data.tool_arg) {
             // the model is typing a tool call — show the code as it streams in
@@ -1873,7 +1981,7 @@
             if (!ctx.liveTool || ctx.liveTool.dataset.name !== data.tool_arg.name) {
               ctx.liveTool = makeToolNotice({name: data.tool_arg.name, arg: ''});
               ctx.liveTool.open = true;          // open while typing so the code is visible
-              appendTool(ctx, ctx.liveTool);
+              addToolNotice(ctx, ctx.liveTool);
             }
             ctx.liveTool.querySelector('.tn-code code').textContent += data.tool_arg.delta;
           }
@@ -1883,7 +1991,7 @@
               ctx.liveTool.querySelector('.tn-code code').textContent = String(data.tool.arg || '');
             } else {
               ctx.liveTool = makeToolNotice(data.tool);
-              appendTool(ctx, ctx.liveTool);
+              addToolNotice(ctx, ctx.liveTool);
             }
           }
           if (data.result) {
@@ -1895,21 +2003,22 @@
               ctx.liveTool = null;
             }
           }
-          if (data.artifact) appendTool(ctx, artifactFrame(data.artifact));
+          if (data.artifact) appendBlock(ctx, artifactFrame(data.artifact));
           if (data.approval) {
             ctx.setStatus('waiting', 'Waiting for your approval', 'wait');
-            appendTool(ctx, approvalCard(data.approval, ctx)); ctx.waiting = true;}
+            appendBlock(ctx, approvalCard(data.approval, ctx)); ctx.waiting = true;}
           if (data.token) {
             ctx.gotText = true; if (!ctx.errored) ctx.setStatus('working', 'Writing', 'orbit');
-            const a = openSegment(ctx, 'answer');   // also collapses the thinking block above it
-            ctx.answerRaw += data.token;
+            const a = answerBlock(ctx);             // also closes the thinking chain above it
+            ctx.answerRaw += data.token; ctx.replyText += data.token;
             a.innerHTML = renderMarkdown(ctx.answerRaw);
             enhanceCode(a);
           }
           if (data.done && data.done.summary && !ctx.gotText) {
             ctx.gotText = true;
-            const a = openSegment(ctx, 'answer');
+            const a = answerBlock(ctx);
             ctx.answerRaw += (ctx.answerRaw ? '\n\n' : '') + '**Done:** ' + data.done.summary;
+            ctx.replyText += data.done.summary;
             a.innerHTML = renderMarkdown(ctx.answerRaw);
             enhanceCode(a);
           }

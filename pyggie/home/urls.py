@@ -8,6 +8,7 @@ urlpatterns = [
     path('send/',               views.send_message, name='send_message'),
     path('agent/send/',    views.agent_send,    name='agent_send'),
     path('agent/approve/', views.agent_approve, name='agent_approve'),
+    path('stop/',               views.stop_reply,  name='stop_reply'),
     path('artifact/<int:artifact_id>/', views.artifact_view, name='artifact'),
     # artifacts & skills panels
     path('artifacts/',       views.artifacts_list,  name='artifacts_list'),

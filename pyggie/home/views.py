@@ -8,7 +8,16 @@ from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message, AgentRun, Artifact
 from . import agent, files
 from django.http import HttpResponse
+from django.core.cache import cache
 from . import ollama
+
+
+def _stop_key(chat_id):
+    return f"clankr-stop:{chat_id}"
+
+
+def _stop_requested(chat_id):
+    return cache.get(_stop_key(chat_id)) is not None
 
 
 def _parse(request):
@@ -49,6 +58,7 @@ def send_message(request):
     msg = Message.objects.create(chat=chat, role='user', content=content)
     upload_errors = files.save_attachments(msg, uploads)
     history = files.build_history(chat, ollama.get_caps(model))
+    cache.delete(_stop_key(chat.id))
 
     full_reply = []
 
@@ -58,17 +68,23 @@ def send_message(request):
         if upload_errors:
             yield f"data: {json.dumps({'token': '> ⚠️ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
 
-        # kind is 'token', 'thinking' or 'tool'; only the answer is saved
+        # kind is 'token', 'thinking' or 'tool'; only the answer is saved.
+        # finally: whatever was written is saved, even when stopped or disconnected
+        replies = ollama.chat_stream(model=model, messages=history)
         try:
-            for kind, value in ollama.chat_stream(model=model, messages=history):
+            for kind, value in replies:
+                if _stop_requested(chat.id):
+                    break                      # the user pressed stop
                 if kind == 'token':
                     full_reply.append(value)
                 yield f"data: {json.dumps({kind: value})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
-
-        if full_reply:
-            Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
+        finally:
+            replies.close()                    # closes the connection to Ollama
+            cache.delete(_stop_key(chat.id))
+            if ''.join(full_reply).strip():
+                Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
         yield "data: [DONE]\n\n"
 
     return StreamingHttpResponse(stream(), content_type='text/event-stream')
@@ -79,15 +95,25 @@ def _agent_stream(run, chat, gen, prefix_events=()):
     texts = []
     def stream():
         yield f"data: {json.dumps({'chat_id': chat.id, 'run_id': run.id})}\n\n"
+        stopped = False
         try:
             for kind, value in gen:
+                if _stop_requested(chat.id):
+                    stopped = True
+                    break                      # the user pressed stop
                 if kind == 'token': texts.append(value)
                 yield f"data: {json.dumps({kind: value})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
-        run.save()
-        if ''.join(texts).strip():
-            Message.objects.create(chat=chat, role='ai', content=''.join(texts))
+        finally:
+            # runs even if the browser disconnects mid-stream, so the reply is kept
+            gen.close()
+            cache.delete(_stop_key(chat.id))
+            if stopped:
+                run.status, run.pending = 'stopped', []
+            run.save()
+            if ''.join(texts).strip():
+                Message.objects.create(chat=chat, role='ai', content=''.join(texts))
         yield "data: [DONE]\n\n"
     return StreamingHttpResponse(stream(), content_type='text/event-stream')
 
@@ -102,6 +128,7 @@ def agent_send(request):
         chat = Chat.objects.create(user=request.user, title=content[:60])
     msg = Message.objects.create(chat=chat, role='user', content=content)
     upload_errors = files.save_attachments(msg, uploads)
+    cache.delete(_stop_key(chat.id))
     agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
     history = files.build_history(chat, ollama.get_caps(model))
     run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
@@ -122,6 +149,18 @@ def agent_approve(request):
         yield from agent.resume(run, bool(data.get('approve')), bool(data.get('always')))
         yield from agent.drive(run, run.model)
     return _agent_stream(run, run.chat, gen())
+
+@login_required
+@require_POST
+def stop_reply(request):
+    """Ask the reply in progress in this chat to stop. The running stream checks
+    this flag between chunks; a run waiting for approval is ended right here."""
+    data = json.loads(request.body)
+    chat = get_object_or_404(Chat, id=data.get('chat_id'), user=request.user)
+    cache.set(_stop_key(chat.id), True, timeout=300)
+    AgentRun.objects.filter(chat=chat, status='running').update(status='stopped', pending=[])
+    return JsonResponse({'ok': True})
+
 
 @login_required
 @xframe_options_exempt        # the UI previews artifacts in a sandboxed iframe; a

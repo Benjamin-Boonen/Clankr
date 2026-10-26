@@ -28,10 +28,12 @@ TOOLS = [
 ]
 
 SYSTEM_PROMPT = (
-    "Format replies in Markdown. Write all mathematics in LaTeX: "
-    "inline math between single dollar signs ($x^2$), "
-    "displayed equations between double dollar signs ($$ ... $$). "
-    "Never write math as plain text or ASCII art.\n"
+    "Answer the question asked, directly, in Markdown prose, at the length the question needs. "
+    "Do not offer extra help at the end, do not ask whether the user wants a diagram, SVG, "
+    "file, artifact, table or more examples, and do not produce anything the user did not ask for. "
+    "Use LaTeX only for actual mathematical expressions: inline between single dollar signs ($x^2$), "
+    "displayed between double dollar signs ($$ ... $$). Write ordinary words, plain numbers and "
+    "units as plain text. Never draw math as ASCII art.\n"
     "You have two tools: web_search and fetch_page. Use them when the question "
     "needs current facts, specifics you are unsure of, or sources. Do NOT use them "
     "for chit-chat, maths, or things you know well. Write your own focused search "
@@ -157,20 +159,23 @@ def chat_stream(model, messages):
         _check(resp)
 
         content, tool_calls = [], []
-        for line in resp.iter_lines():
-            if not line:
-                continue
-            chunk = json.loads(line)
-            m = chunk.get("message", {})
-            if th := m.get("thinking"):
-                yield "thinking", th
-            if token := m.get("content"):
-                content.append(token)
-                yield "token", token
-            for name, frag in merge_tool_calls(tool_calls, m.get("tool_calls")):
-                yield "tool_arg", {"name": name, "delta": frag}   # live, while typed
-            if chunk.get("done"):
-                break
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                m = chunk.get("message", {})
+                if th := m.get("thinking"):
+                    yield "thinking", th
+                if token := m.get("content"):
+                    content.append(token)
+                    yield "token", token
+                for name, frag in merge_tool_calls(tool_calls, m.get("tool_calls")):
+                    yield "tool_arg", {"name": name, "delta": frag}   # live, while typed
+                if chunk.get("done"):
+                    break
+        finally:
+            resp.close()      # stopping early must drop the connection to Ollama
 
         if not tool_calls:
             return
