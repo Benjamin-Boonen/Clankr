@@ -1,14 +1,15 @@
 diff --git a/pyggie/home/agent.py b/pyggie/home/agent.py
-index 95851ca..8f3b110 100644
+index 95851ca..ff431a6 100644
 --- a/pyggie/home/agent.py
 +++ b/pyggie/home/agent.py
-@@ -34,8 +34,10 @@ TOOLS = [
+@@ -34,8 +34,11 @@ TOOLS = [
  
  AGENT_PROMPT = (
      "\nYou are in AGENT MODE. Work autonomously on the user's task: plan briefly, call tools, "
 -    "inspect results, fix mistakes, repeat. Prefer run_python for computation. Use create_artifact for "
 -    "deliverables (load_skill first for html/report/diagram). User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
-+    "inspect results, fix mistakes, repeat. Prefer run_python for computation. Use create_artifact only when the "
++    "inspect results, fix mistakes, repeat. Gather facts and sources with web_search and fetch_page first, "
++    "before writing anything, even when you think you know the answer. Prefer run_python for computation. Use create_artifact only when the "
 +    "user asked for a deliverable they will keep (a page, document, diagram) (load_skill first for html/report/diagram). "
 +    "Answer questions and explanations in text; never create an artifact or file just to illustrate an answer. "
 +    "User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
@@ -30,10 +31,10 @@ index d1bba31..3bf706b 100644
  
  class Artifact(models.Model):
 diff --git a/pyggie/home/ollama.py b/pyggie/home/ollama.py
-index 903beb5..803f2e6 100644
+index 903beb5..4ca0f9a 100644
 --- a/pyggie/home/ollama.py
 +++ b/pyggie/home/ollama.py
-@@ -28,10 +28,12 @@ TOOLS = [
+@@ -28,16 +28,20 @@ TOOLS = [
  ]
  
  SYSTEM_PROMPT = (
@@ -41,16 +42,30 @@ index 903beb5..803f2e6 100644
 -    "inline math between single dollar signs ($x^2$), "
 -    "displayed equations between double dollar signs ($$ ... $$). "
 -    "Never write math as plain text or ASCII art.\n"
+-    "You have two tools: web_search and fetch_page. Use them when the question "
+-    "needs current facts, specifics you are unsure of, or sources. Do NOT use them "
+-    "for chit-chat, maths, or things you know well. Write your own focused search "
+-    "query (not the user's raw message). Search snippets are short: fetch_page the "
+-    "1-3 most promising URLs before answering. Then write a full answer in your own "
+-    "words and cite the URLs you used. "
 +    "Answer the question asked, directly, in Markdown prose, at the length the question needs. "
 +    "Do not offer extra help at the end, do not ask whether the user wants a diagram, SVG, "
 +    "file, artifact, table or more examples, and do not produce anything the user did not ask for. "
 +    "Use LaTeX only for actual mathematical expressions: inline between single dollar signs ($x^2$), "
 +    "displayed between double dollar signs ($$ ... $$). Write ordinary words, plain numbers and "
 +    "units as plain text. Never draw math as ASCII art.\n"
-     "You have two tools: web_search and fetch_page. Use them when the question "
-     "needs current facts, specifics you are unsure of, or sources. Do NOT use them "
-     "for chit-chat, maths, or things you know well. Write your own focused search "
-@@ -157,20 +159,23 @@ def chat_stream(model, messages):
++    "You have two tools: web_search and fetch_page. Gather your content from the web: "
++    "for any question about facts, definitions, people, places, events, prices, dates, "
++    "software or how something works, search first, even when you think you know the answer, "
++    "then answer from what you found. Skip search only for chit-chat, reasoning or maths "
++    "you can do yourself, and for rewriting text the user gave you. "
++    "Write your own focused search query (not the user's raw message). Search snippets are "
++    "short: fetch_page the 1-3 most promising URLs before answering. Then write the answer in "
++    "your own words and cite the URLs you used. "
+     "To use a tool, call it. Never write tool calls as text."
+ )
+ 
+@@ -157,20 +161,23 @@ def chat_stream(model, messages):
          _check(resp)
  
          content, tool_calls = [], []
