@@ -66,7 +66,7 @@ def send_message(request):
         # first chunk: send the chat_id so the frontend knows which chat this is
         yield f"data: {json.dumps({'chat_id': chat.id})}\n\n"
         if upload_errors:
-            yield f"data: {json.dumps({'token': '> ⚠️ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
+            yield f"data: {json.dumps({'token': '> △ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
 
         # kind is 'token', 'thinking' or 'tool'; only the answer is saved.
         # finally: whatever was written is saved, even when stopped or disconnected
@@ -134,7 +134,7 @@ def agent_send(request):
     run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
     def gen():
         if upload_errors:
-            yield 'token', '> ⚠️ ' + '; '.join(upload_errors) + '\n\n'
+            yield 'token', '> △ ' + '; '.join(upload_errors) + '\n\n'
         yield from agent.drive(run, model)
     return _agent_stream(run, chat, gen())
 

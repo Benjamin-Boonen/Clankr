@@ -1168,7 +1168,7 @@
           <div class="dot"></div>
           <select id="modelSelect">
             {% for m in models %}
-            <option value="{{ m.name }}">{{ m.name }} {{ m.tag }}</option>
+            <option value="{{ m.name }}">{{ m.label }}{% if m.tag %} &nbsp;{{ m.tag }}{% endif %}</option>
             {% empty %}
             <option value="">no models found</option>
             {% endfor %}
@@ -1240,7 +1240,7 @@
           <textarea id="msgInput" placeholder="Message Clank.r…" rows="1" onkeydown="handleKey(event)"
             oninput="autoResize(this)"></textarea>
           <button class="attach-btn" type="button" title="Attach files (code, text, PDF, images)"
-            onclick="document.getElementById('fileInput').click()">📎</button>
+            onclick="document.getElementById('fileInput').click()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.1l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></svg></button>
           <input type="file" id="fileInput" multiple hidden
             accept=".txt,.md,.py,.js,.ts,.html,.css,.json,.csv,.c,.cpp,.h,.java,.rs,.go,.sh,.yml,.yaml,.toml,.tex,.sql,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*">
           <button class="send-btn stop-btn" id="stopBtn" type="button" onclick="stopReply()" title="Stop" hidden>
@@ -1382,7 +1382,7 @@
     function renderChips() {
       const box = document.getElementById('fileChips'); box.innerHTML = '';
       pendingFiles.forEach((f, i) => {
-        const c = document.createElement('span'); c.textContent = '📎 ' + f.name + ' ✕';
+        const c = document.createElement('span'); c.textContent = '⊕ ' + f.name + ' ✕';
         c.title = 'Remove'; c.onclick = () => {pendingFiles.splice(i, 1); renderChips(); updateSend();};
         box.append(c);
       });
@@ -1390,6 +1390,23 @@
     function updateSend() {sendBtn.disabled = busy || (!input.value.trim() && !pendingFiles.length);}
     fileInput.addEventListener('change', () => {
       pendingFiles.push(...fileInput.files); fileInput.value = ''; renderChips(); updateSend();
+    });
+
+    // Ctrl+V: a picture on the clipboard is attached like a file
+    const PASTE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+    input.addEventListener('paste', e => {
+      const items = [...(e.clipboardData ? e.clipboardData.items : [])]
+        .filter(i => i.kind === 'file' && PASTE_IMAGE_TYPES.includes(i.type));
+      if (!items.length) return;             // plain text pastes as normal
+      e.preventDefault();
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      items.forEach((item, n) => {
+        const blob = item.getAsFile();
+        if (!blob) return;
+        const ext = item.type.split('/')[1].replace('jpeg', 'jpg');
+        pendingFiles.push(new File([blob], `pasted-${stamp}-${n + 1}.${ext}`, {type: item.type}));
+      });
+      renderChips(); updateSend();
     });
     let busy = false;   // true while a reply is streaming
     let activeCtx = null, activeAbort = null;   // the reply in progress, and its browser-side abort
@@ -1487,7 +1504,7 @@
       const data = await resp.json();
 
       msgs.innerHTML = '';
-      data.messages.forEach(m => addMessage(m.content + (m.files && m.files.length ? '\n\n📎 ' + m.files.join(', ') : ''), m.role === 'user' ? 'user' : 'ai'));
+      data.messages.forEach(m => addMessage(m.content + (m.files && m.files.length ? '\n\n⊕ ' + m.files.join(', ') : ''), m.role === 'user' ? 'user' : 'ai'));
       (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
       currentChatId = data.id;
       setActive(data.id);
@@ -1730,7 +1747,7 @@
 
       const files = pendingFiles;
       pendingFiles = []; renderChips();
-      addMessage(text + (files.length ? '\n\n📎 ' + files.map(f => f.name).join(', ') : ''), 'user');
+      addMessage(text + (files.length ? '\n\n⊕ ' + files.map(f => f.name).join(', ') : ''), 'user');
       input.value = '';
       autoResize(input);
       sendBtn.disabled = true;
@@ -1863,9 +1880,9 @@
     }
 
     // collapsible notice for one tool call: summary row + streamed code + result
-    const TOOL_ICONS = {web_search: '🔍', fetch_page: '📄', run_python: '🐍', run_shell: '💻',
-                        write_file: '📝', read_file: '📂', create_artifact: '🎨',
-                        load_skill: '🧰', finish: '✅'};
+    const TOOL_ICONS = {web_search: '⌕', fetch_page: '↗', run_python: 'λ', run_shell: '$',
+                        write_file: '✎', read_file: '▤', create_artifact: '◈',
+                        load_skill: '✦', finish: '✓'};
 
     function makeToolNotice(tool) {
       const d = document.createElement('details');
@@ -2121,10 +2138,10 @@
         const d = await r.json();
         box.innerHTML = '';
         if (!d.artifacts.length) { box.innerHTML = '<div class="history-empty">No artifacts yet</div>'; return; }
-        const icons = {html: '🌐', svg: '📐', markdown: '📄'};
+        const icons = {html: '⟨⟩', svg: '◬', markdown: '≡'};
         d.artifacts.forEach(a => {
           const el = document.createElement('div'); el.className = 'panel-row';
-          el.innerHTML = `<div class="pr-main"><span class="pr-title">${icons[a.kind] || '📄'} ${escHtml(a.title)}</span>` +
+          el.innerHTML = `<div class="pr-main"><span class="pr-title">${icons[a.kind] || '≡'} ${escHtml(a.title)}</span>` +
                           `<span class="pr-sub">${escHtml(a.kind)} · ${escHtml(a.chat_title || '')}</span></div>`;
           const open = document.createElement('button'); open.className = 'pr-btn'; open.textContent = 'Open';
           open.onclick = e => { e.stopPropagation(); window.open(`/artifact/${a.id}/`, '_blank'); };
@@ -2175,7 +2192,7 @@
         if (!d.skills.length) { box.innerHTML = '<div class="history-empty">No skills yet</div>'; return; }
         d.skills.forEach(s => {
           const el = document.createElement('div'); el.className = 'panel-row';
-          el.innerHTML = `<div class="pr-main"><span class="pr-title">🧰 ${escHtml(s.name)}</span>` +
+          el.innerHTML = `<div class="pr-main"><span class="pr-title">✦ ${escHtml(s.name)}</span>` +
                           `<span class="pr-sub">${escHtml(s.description)}</span></div>` +
                           `<div class="pr-body">${escHtml(s.body)}</div>`;
           el.onclick = () => el.classList.toggle('open');

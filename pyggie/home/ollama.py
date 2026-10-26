@@ -1,5 +1,6 @@
 # home/ollama.py — wrapper for the Ollama API, with tool calling (web search)
 import json
+import re
 import datetime
 from functools import lru_cache
 
@@ -74,15 +75,30 @@ def get_caps(name):
     return tuple(r.json().get("capabilities", []))
 
 
+# capability symbols shown after a model's name
+CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images
+
+
+def pretty_name(name):
+    """'phi4-mini:4b' -> 'Phi 4 Mini · 4B'; 'gemma4:e3b' -> 'Gemma 4 · E3B'."""
+    base, _, size = name.partition(":")
+    base = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", base)          # phi4 -> phi 4
+    title = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_\s]+", base) if w)
+    size = size.upper()
+    if not size or size == "LATEST":
+        return title
+    return f"{title} · {size}"
+
+
 def get_models():
-    """[{'name': 'qwen3:8b', 'tag': '🧠🔧'}, ...]  (🧠 thinking, 🔧 tools)"""
+    """[{'name': 'qwen3:8b', 'label': 'Qwen 3 · 8B', 'tag': '∿ ⚙'}, ...]"""
     resp = requests.get(f"{OLLAMA_BASE}/api/tags")
     _check(resp)
     out = []
     for m in resp.json()['models']:
         caps = get_caps(m['name'])
-        tag = ("🧠" if "thinking" in caps else "") + ("🔧" if "tools" in caps else "")
-        out.append({"name": m['name'], "tag": tag})
+        tag = " ".join(sym for cap, sym in CAP_SYMBOLS if cap in caps)
+        out.append({"name": m['name'], "label": pretty_name(m['name']), "tag": tag})
     return out
 
 
