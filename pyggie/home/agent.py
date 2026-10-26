@@ -34,7 +34,8 @@ TOOLS = [
 
 AGENT_PROMPT = (
     "\nYou are in AGENT MODE. Work autonomously on the user's task: plan briefly, call tools, "
-    "inspect results, fix mistakes, repeat. Prefer run_python for computation. Use create_artifact only when the "
+    "inspect results, fix mistakes, repeat. Gather facts and sources with web_search and fetch_page first, "
+    "before writing anything, even when you think you know the answer. Prefer run_python for computation. Use create_artifact only when the "
     "user asked for a deliverable they will keep (a page, document, diagram) (load_skill first for html/report/diagram). "
     "Answer questions and explanations in text; never create an artifact or file just to illustrate an answer. "
     "User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
