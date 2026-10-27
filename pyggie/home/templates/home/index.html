@@ -243,27 +243,32 @@
     }
 
     .topbar {
-      height: 52px;
-      padding: 0 24px;
+      min-height: 52px;
+      padding: 8px 16px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
+      flex-wrap: wrap;
+      gap: 8px;
     }
 
     .model-badge {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
       font-family: var(--font-mono);
       font-size: 12px;
       color: var(--muted);
-      padding: 5px 10px;
+      padding: 4px 8px 4px 10px;
       border-radius: 20px;
       border: 1px solid var(--border);
-      cursor: pointer;
-      transition: border-color 0.15s, color 0.15s;
+      position: relative;
+      z-index: 2;
+      flex: 1 1 auto;
+      min-width: 0;
+      flex-wrap: wrap;
     }
 
     .model-badge:hover {
@@ -271,19 +276,77 @@
       color: var(--text);
     }
 
-    .model-badge select {
-      background: transparent;
+    /* native select stays in the DOM: #modelSelect.value is what /send/ posts,
+       and Settings copies its options. It cannot draw SVG, so it is not shown. */
+    .model-native {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .mp {position: relative; min-width: 0}
+    .mp-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1px;
+      max-width: 9rem;
+      background: none;
       border: none;
-      outline: none;
       color: inherit;
       font: inherit;
       cursor: pointer;
+      padding: 1px 2px;
+      border-radius: 6px;
     }
-
-    .model-badge select option {
+    .mp-btn:focus-visible {outline: 2px solid var(--accent); outline-offset: 2px}
+    .mp-btn:disabled {cursor: default; opacity: .6}
+    .mp-k {
+      font-size: 8px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      line-height: 1;
+    }
+    .mp-v {display: flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0}
+    .mp-txt {overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text)}
+    .mp-fam {width: 15px; height: 15px; margin: 0; flex-shrink: 0}
+    .mp-fam svg {width: 100%; height: 100%; display: block}
+    .mp-sep {opacity: .35; user-select: none; padding: 0 1px}
+    .mp-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      z-index: 30;
+      min-width: max(100%, 9rem);
+      max-height: 280px;
+      overflow: auto;
+      margin: 0;
+      padding: 4px;
+      list-style: none;
       background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 10px;
+      box-shadow: 0 12px 40px hsl(0 0% 0% / .45);
+    }
+    .mp[data-level="size"] .mp-menu {left: auto; right: 0}
+    .mp-menu[hidden] {display: none}
+    .mp-menu li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 7px;
+      cursor: pointer;
+      white-space: nowrap;
       color: var(--text);
     }
+    .mp-menu li[aria-selected="true"] {background: var(--accent-a15)}
+    .mp-menu li.mp-on, .mp-menu li:hover {background: var(--surface2)}
+    .mp-menu li.mp-empty {color: var(--muted); cursor: default}
+    .mp-menu .mp-fam {width: 16px; height: 16px}
 
     .dot {
       width: 6px;
@@ -1050,6 +1113,7 @@
       pointer-events: none; z-index: 0; opacity: .5;
     }
     .main > .topbar, .main > .messages, .main > .input-area {position: relative; z-index: 1}
+    .main > .topbar {z-index: 4}
 
     /* jump-to-latest */
     .latest-btn {
@@ -1170,15 +1234,38 @@
             <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" />
           </svg>
         </button>
-        <div class="model-badge">
+        <div class="model-badge" id="modelPicker">
           <div class="dot"></div>
-          <select id="modelSelect">
+          <select id="modelSelect" class="model-native" tabindex="-1" aria-hidden="true">
             {% for m in models %}
-            <option value="{{ m.name }}">{{ m.label }}{% if m.tag %} &nbsp;{{ m.tag }}{% endif %}</option>
+            <option value="{{ m.name }}" data-family="{{ m.family_key }}" data-family-label="{{ m.family }}" data-model="{{ m.model }}" data-size="{{ m.size }}">{{ m.label }}{% if m.tag %} &nbsp;{{ m.tag }}{% endif %}</option>
             {% empty %}
             <option value="">no models found</option>
             {% endfor %}
           </select>
+          <div class="mp" data-level="family">
+            <button type="button" class="mp-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelMenuFamily">
+              <span class="mp-k">Family</span>
+              <span class="mp-v"><span class="mp-fam" data-family-icon=""></span><span class="mp-txt">—</span></span>
+            </button>
+            <ul class="mp-menu" id="modelMenuFamily" role="listbox" hidden></ul>
+          </div>
+          <span class="mp-sep" aria-hidden="true">/</span>
+          <div class="mp" data-level="model">
+            <button type="button" class="mp-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelMenuModel">
+              <span class="mp-k">Model</span>
+              <span class="mp-v"><span class="mp-txt">—</span></span>
+            </button>
+            <ul class="mp-menu" id="modelMenuModel" role="listbox" hidden></ul>
+          </div>
+          <span class="mp-sep" aria-hidden="true">/</span>
+          <div class="mp" data-level="size">
+            <button type="button" class="mp-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelMenuSize">
+              <span class="mp-k">Size</span>
+              <span class="mp-v"><span class="mp-txt">—</span></span>
+            </button>
+            <ul class="mp-menu" id="modelMenuSize" role="listbox" hidden></ul>
+          </div>
           <label class="agent-toggle" title="Agent mode: Clank.r keeps using tools until the task is done">
             <input type="checkbox" id="agentMode">
             <span class="ag-sw" aria-hidden="true"></span>
@@ -1431,6 +1518,7 @@
     defaultSel.addEventListener('change', () => {
       try {localStorage.setItem('Clank.r.defaultModel', defaultSel.value);} catch (e) { }
       modelSel.value = defaultSel.value;
+      paintModelPicker();
     });
 
     // ─── accent colour ───
@@ -1915,8 +2003,223 @@
         } catch (e) { /* keep the fallback */ }
       }));
       fillIcons();
+      paintModelPicker();
+    }
+    // ─── model picker: Family / Model / Size ───
+    // #modelSelect stays the value store (raw Ollama id in .value). This UI only
+    // reflects it. Family SVGs: icons/family-<key>.svg, else a letter monogram.
+    // Do not put data-icon on these nodes — fillIcons() replaces that node's
+    // whole innerHTML and would wipe the Family / Model / Size labels.
+    let paintModelPicker = function () {};
+    function familyMonogram(label) {
+      const ch = ((String(label).match(/[A-Za-z0-9]/) || ['?'])[0]).toUpperCase();
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><text x="12" y="16" text-anchor="middle" font-size="11" font-family="ui-monospace,monospace" fill="currentColor" stroke="none">${ch}</text></svg>`;
+    }
+    function initModelPicker() {
+      const root = document.getElementById('modelPicker');
+      if (!root || root.dataset.ready) return;
+      root.dataset.ready = '1';
+      const levels = ['family', 'model', 'size'];
+      const menus = {}, buttons = {};
+      levels.forEach(level => {
+        const wrap = root.querySelector(`.mp[data-level="${level}"]`);
+        menus[level] = wrap.querySelector('.mp-menu');
+        buttons[level] = wrap.querySelector('.mp-btn');
+        buttons[level].addEventListener('click', () => {
+          if (menus[level].hidden) openMenu(level);
+          else closeMenus();
+        });
+      });
+      function entries() {
+        return [...modelSel.options].filter(o => o.value).map(o => ({
+          name: o.value,
+          family: o.dataset.family || 'other',
+          familyLabel: o.dataset.familyLabel || 'Other',
+          model: o.dataset.model || 'Base',
+          size: o.dataset.size || 'Latest',
+        }));
+      }
+      function current() {
+        return entries().find(e => e.name === modelSel.value) || entries()[0] || null;
+      }
+      function byNum(a, b, pick) {
+        return pick(a).localeCompare(pick(b), undefined, {numeric: true});
+      }
+      function sizeRank(s) {
+        const m = String(s).match(/(\d+(?:\.\d+)?)/);
+        return m ? parseFloat(m[1]) : 1e9;
+      }
+      function prefer(list, cur) {
+        return list.find(x => x.model === cur.model && x.size === cur.size)
+          || list.find(x => x.model === cur.model)
+          || list.find(x => x.size === cur.size)
+          || list[0];
+      }
+      function optionsFor(level, cur) {
+        const all = entries();
+        if (!cur) return [];
+        if (level === 'family') {
+          const seen = new Map();
+          all.forEach(e => { if (!seen.has(e.family)) seen.set(e.family, e); });
+          return [...seen.values()]
+            .sort((a, b) => byNum(a, b, e => e.familyLabel))
+            .map(e => ({
+              label: e.familyLabel,
+              key: e.family,
+              selected: e.family === cur.family,
+              pick: prefer(all.filter(x => x.family === e.family), cur).name,
+            }));
+        }
+        if (level === 'model') {
+          const inFam = all.filter(e => e.family === cur.family);
+          const seen = new Map();
+          inFam.forEach(e => { if (!seen.has(e.model)) seen.set(e.model, e); });
+          return [...seen.values()]
+            .sort((a, b) => byNum(a, b, e => e.model))
+            .map(e => ({
+              label: e.model,
+              selected: e.model === cur.model,
+              pick: (inFam.find(x => x.model === e.model && x.size === cur.size)
+                || inFam.find(x => x.model === e.model)).name,
+            }));
+        }
+        const sizes = all.filter(e => e.family === cur.family && e.model === cur.model);
+        const dup = {};
+        sizes.forEach(e => { dup[e.size] = (dup[e.size] || 0) + 1; });
+        return sizes
+          .slice()
+          .sort((a, b) => sizeRank(a.size) - sizeRank(b.size) || a.size.localeCompare(b.size))
+          .map(e => ({
+            label: dup[e.size] > 1 ? e.size + ' · ' + e.name : e.size,
+            selected: e.name === cur.name,
+            pick: e.name,
+          }));
+      }
+      function iconBody(key) {
+        return iconSvg[key] || ICON_FALLBACK[key] || '';
+      }
+      function closeMenus() {
+        levels.forEach(level => {
+          menus[level].hidden = true;
+          buttons[level].setAttribute('aria-expanded', 'false');
+        });
+      }
+      function choose(name) {
+        if (!name || ![...modelSel.options].some(o => o.value === name)) return;
+        modelSel.value = name;
+        closeMenus();
+        paintModelPicker();
+      }
+      function openMenu(level) {
+        closeMenus();
+        const cur = current();
+        const items = optionsFor(level, cur);
+        const menu = menus[level];
+        menu.innerHTML = '';
+        if (!items.length) {
+          const empty = document.createElement('li');
+          empty.className = 'mp-empty';
+          empty.textContent = 'No models';
+          menu.append(empty);
+        }
+        items.forEach((item, i) => {
+          const li = document.createElement('li');
+          li.setAttribute('role', 'option');
+          li.tabIndex = -1;
+          li.setAttribute('aria-selected', item.selected ? 'true' : 'false');
+          if (item.selected) li.classList.add('mp-on');
+          if (level === 'family') {
+            const ic = document.createElement('span');
+            ic.className = 'mp-fam';
+            ic.dataset.familyIcon = 'family-' + item.key;
+            ic.innerHTML = iconBody('family-' + item.key);
+            const tx = document.createElement('span');
+            tx.textContent = item.label;
+            li.append(ic, tx);
+          } else {
+            li.textContent = item.label;
+          }
+          li.addEventListener('click', () => choose(item.pick));
+          li.addEventListener('keydown', ev => {
+            const rows = [...menu.querySelectorAll('[role="option"]')];
+            const idx = rows.indexOf(li);
+            if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+              ev.preventDefault();
+              const next = rows[idx + (ev.key === 'ArrowDown' ? 1 : -1)];
+              if (next) { rows.forEach(r => r.classList.remove('mp-on')); next.classList.add('mp-on'); next.focus(); }
+            } else if (ev.key === 'Enter') {
+              ev.preventDefault();
+              choose(item.pick);
+            } else if (ev.key === 'Escape') {
+              ev.preventDefault();
+              closeMenus();
+              buttons[level].focus();
+            } else if (ev.key === 'Tab') {
+              closeMenus();
+            }
+          });
+          menu.append(li);
+          if (item.selected) menu._focus = li;
+        });
+        menu.hidden = false;
+        buttons[level].setAttribute('aria-expanded', 'true');
+        (menu._focus || menu.querySelector('[role="option"]'))?.focus();
+      }
+      buttons.family.addEventListener('keydown', e => onBtnKey(e, 'family'));
+      buttons.model.addEventListener('keydown', e => onBtnKey(e, 'model'));
+      buttons.size.addEventListener('keydown', e => onBtnKey(e, 'size'));
+      function onBtnKey(e, level) {
+        // Enter and Space already activate the button's click handler.
+        // Handling them here too would open the menu and immediately close it.
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          openMenu(level);
+        }
+      }
+      document.addEventListener('mousedown', e => {
+        if (!root.contains(e.target)) closeMenus();
+      });
+      paintModelPicker = function () {
+        const cur = current();
+        entries().forEach(e => {
+          const k = 'family-' + e.family;
+          if (!ICON_FALLBACK[k]) ICON_FALLBACK[k] = familyMonogram(e.familyLabel);
+        });
+        const famIcon = root.querySelector('[data-level="family"] .mp-fam');
+        const texts = {
+          family: root.querySelector('[data-level="family"] .mp-txt'),
+          model: root.querySelector('[data-level="model"] .mp-txt'),
+          size: root.querySelector('[data-level="size"] .mp-txt'),
+        };
+        if (!cur) {
+          texts.family.textContent = 'No models';
+          texts.model.textContent = '—';
+          texts.size.textContent = '—';
+          famIcon.innerHTML = '';
+          levels.forEach(l => { buttons[l].disabled = true; });
+          return;
+        }
+        levels.forEach(l => { buttons[l].disabled = false; });
+        texts.family.textContent = cur.familyLabel;
+        texts.model.textContent = cur.model;
+        texts.size.textContent = cur.size;
+        famIcon.dataset.familyIcon = 'family-' + cur.family;
+        famIcon.innerHTML = iconBody('family-' + cur.family);
+        buttons.family.setAttribute('aria-label', 'Family, ' + cur.familyLabel);
+        buttons.model.setAttribute('aria-label', 'Model, ' + cur.model);
+        buttons.size.setAttribute('aria-label', 'Size, ' + cur.size);
+        root.querySelectorAll('.mp-menu .mp-fam').forEach(el => {
+          el.innerHTML = iconBody(el.dataset.familyIcon);
+        });
+      };
+      entries().forEach(e => {
+        const k = 'family-' + e.family;
+        if (!ICON_FALLBACK[k]) ICON_FALLBACK[k] = familyMonogram(e.familyLabel);
+      });
+      paintModelPicker();
     }
     fillIcons();
+    initModelPicker();
     loadIcons();
 
     function makeToolNotice(tool) {

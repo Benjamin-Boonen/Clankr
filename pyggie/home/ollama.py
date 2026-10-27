@@ -75,8 +75,57 @@ def get_caps(name):
     return tuple(r.json().get("capabilities", []))
 
 
-# capability symbols shown after a model's name
+# capability symbols kept on the flat <option> text (Settings copies that text).
+# The top-bar picker does not draw these; it groups by family / model / size.
 CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images
+
+
+def _model_token(word):
+    """'r1' -> 'R1'; 'coder' -> 'Coder'; '2.5' stays '2.5'."""
+    if re.fullmatch(r"[A-Za-z]\d+(?:\.\d+)*", word):
+        return word.upper()
+    return word[:1].upper() + word[1:]
+
+
+def split_ollama_name(name):
+    """Split an Ollama id into the three picker levels.
+
+    Family is the leading A–Z run, after a namespace/ is stripped.
+    Model is the rest of the name (before ':'), or 'Base' when there is none.
+    Size is the tag after ':', uppercased; a missing tag or 'latest' is 'Latest'.
+
+    'phi4-mini:4b'        -> Phi / 4 Mini / 4B
+    'qwen2.5-coder:7b'    -> Qwen / 2.5 Coder / 7B
+    'deepseek-r1:14b'     -> Deepseek / R1 / 14B
+    'mistral:7b'          -> Mistral / Base / 7B
+    'dolphin-mistral:7b'  -> Dolphin / Mistral / 7B
+    'user/foo-bar:Q4_K_M' -> Foo / Bar / Q4_K_M
+
+    family_key is [a-z0-9]+ and matches static/icons/family-<key>.svg.
+    """
+    base, _, size = name.partition(":")
+    if "/" in base:
+        base = base.rsplit("/", 1)[-1]
+    matched = re.match(r"^([A-Za-z]+)(.*)$", base)
+    if matched and matched.group(1):
+        family_raw, rest = matched.group(1), matched.group(2).lstrip("-_.")
+    else:
+        family_raw, rest = "other", base
+    family = family_raw[:1].upper() + family_raw[1:]
+    if rest:
+        model = " ".join(_model_token(w) for w in re.split(r"[-_\s]+", rest) if w) or "Base"
+    else:
+        model = "Base"
+    if not size or size.lower() == "latest":
+        size_label = "Latest"
+    else:
+        size_label = size.upper()
+    return {
+        "family": family,
+        "family_key": re.sub(r"[^a-z0-9]", "", family_raw.lower()) or "other",
+        "model": model,
+        "size": size_label,
+    }
 
 
 def pretty_name(name):
@@ -91,14 +140,26 @@ def pretty_name(name):
 
 
 def get_models():
-    """[{'name': 'qwen3:8b', 'label': 'Qwen 3 · 8B', 'tag': '∿ ⚙'}, ...]"""
+    """[{name, label, tag, family, family_key, model, size}, ...]
+
+    name is the raw Ollama id sent to /send/ and /agent/send/. Do not rename it.
+    label + tag are the flat option text. Settings (#defaultModel) copies
+    #modelSelect's innerHTML, so both must stay. The top bar reads family /
+    family_key / model / size and ignores the joined label.
+    """
     resp = requests.get(f"{OLLAMA_BASE}/api/tags")
     _check(resp)
     out = []
     for m in resp.json()['models']:
         caps = get_caps(m['name'])
         tag = " ".join(sym for cap, sym in CAP_SYMBOLS if cap in caps)
-        out.append({"name": m['name'], "label": pretty_name(m['name']), "tag": tag})
+        parts = split_ollama_name(m['name'])
+        out.append({
+            "name": m["name"],
+            "label": f"{parts['family']} · {parts['model']} · {parts['size']}",
+            "tag": tag,
+            **parts,
+        })
     return out
 
 

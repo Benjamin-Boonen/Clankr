@@ -12,3 +12,12 @@ Artifacts (Artifacts panel):
 Other:
   skill.svg            (Skills panel)
   attach.svg           (attach-file button)
+
+Model picker — family column only (model and size are text):
+  family-<key>.svg
+  key = leading letters of the Ollama name, lowercased.
+  llama3.1:8b -> family-llama.svg,  qwen2.5-coder:7b -> family-qwen.svg,
+  deepseek-r1:14b -> family-deepseek.svg, mistral:7b -> family-mistral.svg.
+  A missing file falls back to a letter monogram drawn in the page.
+  Drop a 24x24 currentColor SVG here to replace that family's mark.
+  Do not put these on <option> elements: a native select cannot draw SVG.
