@@ -4,6 +4,8 @@
 
 ---
 
+THIS PROJECT IS PARTLY VIBECODED, I DO NOT CLAIM FULL RESPONSIBILITY FOR THE EXECUTION NOR THE ISSUES
+
 ## Key Features
 
 - **Dynamic Model Naming & Selection**: Real-time UI synchronization updates the active model badge and header labels dynamically.
