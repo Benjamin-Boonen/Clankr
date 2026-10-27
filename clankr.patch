@@ -1,59 +1,38 @@
 diff --git a/pyggie/home/agent.py b/pyggie/home/agent.py
-index 95851ca..ff431a6 100644
+index 8f3b110..ff431a6 100644
 --- a/pyggie/home/agent.py
 +++ b/pyggie/home/agent.py
-@@ -34,8 +34,11 @@ TOOLS = [
+@@ -34,7 +34,8 @@ TOOLS = [
  
  AGENT_PROMPT = (
      "\nYou are in AGENT MODE. Work autonomously on the user's task: plan briefly, call tools, "
--    "inspect results, fix mistakes, repeat. Prefer run_python for computation. Use create_artifact for "
--    "deliverables (load_skill first for html/report/diagram). User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
+-    "inspect results, fix mistakes, repeat. Prefer run_python for computation. Use create_artifact only when the "
 +    "inspect results, fix mistakes, repeat. Gather facts and sources with web_search and fetch_page first, "
 +    "before writing anything, even when you think you know the answer. Prefer run_python for computation. Use create_artifact only when the "
-+    "user asked for a deliverable they will keep (a page, document, diagram) (load_skill first for html/report/diagram). "
-+    "Answer questions and explanations in text; never create an artifact or file just to illustrate an answer. "
-+    "User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
-     "if denied, adapt. run_python has NO network access — never try web or API calls in code; use web_search/fetch_page instead. "
-     "When completely done, call finish(summary) with what you did and what the results are. "
-     "Never write tool calls as text."
-diff --git a/pyggie/home/models.py b/pyggie/home/models.py
-index d1bba31..3bf706b 100644
---- a/pyggie/home/models.py
-+++ b/pyggie/home/models.py
-@@ -30,6 +30,9 @@ class AgentRun(models.Model):
-     allowed = models.JSONField(default=list)    # tools the user said "always allow" for this run
-     steps = models.IntegerField(default=0)
-     status = models.CharField(max_length=10, default='running')
-+    # per-run working state set while the agent runs (not stored in the database)
-+    summary = ''      # the finish() summary; empty until the model calls finish
-+    done = False      # set when the run has finished
- 
- 
- class Artifact(models.Model):
+     "user asked for a deliverable they will keep (a page, document, diagram) (load_skill first for html/report/diagram). "
+     "Answer questions and explanations in text; never create an artifact or file just to illustrate an answer. "
+     "User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
 diff --git a/pyggie/home/ollama.py b/pyggie/home/ollama.py
-index 903beb5..4ca0f9a 100644
+index 803f2e6..36f5e4f 100644
 --- a/pyggie/home/ollama.py
 +++ b/pyggie/home/ollama.py
-@@ -28,16 +28,20 @@ TOOLS = [
- ]
+@@ -1,5 +1,6 @@
+ # home/ollama.py — wrapper for the Ollama API, with tool calling (web search)
+ import json
++import re
+ import datetime
+ from functools import lru_cache
  
- SYSTEM_PROMPT = (
--    "Format replies in Markdown. Write all mathematics in LaTeX: "
--    "inline math between single dollar signs ($x^2$), "
--    "displayed equations between double dollar signs ($$ ... $$). "
--    "Never write math as plain text or ASCII art.\n"
+@@ -34,12 +35,14 @@ SYSTEM_PROMPT = (
+     "Use LaTeX only for actual mathematical expressions: inline between single dollar signs ($x^2$), "
+     "displayed between double dollar signs ($$ ... $$). Write ordinary words, plain numbers and "
+     "units as plain text. Never draw math as ASCII art.\n"
 -    "You have two tools: web_search and fetch_page. Use them when the question "
 -    "needs current facts, specifics you are unsure of, or sources. Do NOT use them "
 -    "for chit-chat, maths, or things you know well. Write your own focused search "
 -    "query (not the user's raw message). Search snippets are short: fetch_page the "
 -    "1-3 most promising URLs before answering. Then write a full answer in your own "
 -    "words and cite the URLs you used. "
-+    "Answer the question asked, directly, in Markdown prose, at the length the question needs. "
-+    "Do not offer extra help at the end, do not ask whether the user wants a diagram, SVG, "
-+    "file, artifact, table or more examples, and do not produce anything the user did not ask for. "
-+    "Use LaTeX only for actual mathematical expressions: inline between single dollar signs ($x^2$), "
-+    "displayed between double dollar signs ($$ ... $$). Write ordinary words, plain numbers and "
-+    "units as plain text. Never draw math as ASCII art.\n"
 +    "You have two tools: web_search and fetch_page. Gather your content from the web: "
 +    "for any question about facts, definitions, people, places, events, prices, dates, "
 +    "software or how something works, search first, even when you think you know the answer, "
@@ -65,568 +44,238 @@ index 903beb5..4ca0f9a 100644
      "To use a tool, call it. Never write tool calls as text."
  )
  
-@@ -157,20 +161,23 @@ def chat_stream(model, messages):
-         _check(resp)
+@@ -72,15 +75,30 @@ def get_caps(name):
+     return tuple(r.json().get("capabilities", []))
  
-         content, tool_calls = [], []
--        for line in resp.iter_lines():
--            if not line:
--                continue
--            chunk = json.loads(line)
--            m = chunk.get("message", {})
--            if th := m.get("thinking"):
--                yield "thinking", th
--            if token := m.get("content"):
--                content.append(token)
--                yield "token", token
--            for name, frag in merge_tool_calls(tool_calls, m.get("tool_calls")):
--                yield "tool_arg", {"name": name, "delta": frag}   # live, while typed
--            if chunk.get("done"):
--                break
-+        try:
-+            for line in resp.iter_lines():
-+                if not line:
-+                    continue
-+                chunk = json.loads(line)
-+                m = chunk.get("message", {})
-+                if th := m.get("thinking"):
-+                    yield "thinking", th
-+                if token := m.get("content"):
-+                    content.append(token)
-+                    yield "token", token
-+                for name, frag in merge_tool_calls(tool_calls, m.get("tool_calls")):
-+                    yield "tool_arg", {"name": name, "delta": frag}   # live, while typed
-+                if chunk.get("done"):
-+                    break
-+        finally:
-+            resp.close()      # stopping early must drop the connection to Ollama
  
-         if not tool_calls:
-             return
++# capability symbols shown after a model's name
++CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images
++
++
++def pretty_name(name):
++    """'phi4-mini:4b' -> 'Phi 4 Mini · 4B'; 'gemma4:e3b' -> 'Gemma 4 · E3B'."""
++    base, _, size = name.partition(":")
++    base = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", base)          # phi4 -> phi 4
++    title = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_\s]+", base) if w)
++    size = size.upper()
++    if not size or size == "LATEST":
++        return title
++    return f"{title} · {size}"
++
++
+ def get_models():
+-    """[{'name': 'qwen3:8b', 'tag': '🧠🔧'}, ...]  (🧠 thinking, 🔧 tools)"""
++    """[{'name': 'qwen3:8b', 'label': 'Qwen 3 · 8B', 'tag': '∿ ⚙'}, ...]"""
+     resp = requests.get(f"{OLLAMA_BASE}/api/tags")
+     _check(resp)
+     out = []
+     for m in resp.json()['models']:
+         caps = get_caps(m['name'])
+-        tag = ("🧠" if "thinking" in caps else "") + ("🔧" if "tools" in caps else "")
+-        out.append({"name": m['name'], "tag": tag})
++        tag = " ".join(sym for cap, sym in CAP_SYMBOLS if cap in caps)
++        out.append({"name": m['name'], "label": pretty_name(m['name']), "tag": tag})
+     return out
+ 
+ 
+diff --git a/pyggie/home/static/icons/README.txt b/pyggie/home/static/icons/README.txt
+new file mode 100644
+index 0000000..4864f4e
+--- /dev/null
++++ b/pyggie/home/static/icons/README.txt
+@@ -0,0 +1,14 @@
++Clank.r icons: one SVG file per name below, in this folder.
++Draw on a 24x24 grid, use stroke="currentColor" (or fill="currentColor"),
++no <script>. Until a file exists, a text symbol is shown instead.
++
++Tools (shown on each tool call):
++  web_search.svg    fetch_page.svg    run_python.svg    run_shell.svg
++  write_file.svg    read_file.svg     create_artifact.svg  load_skill.svg
++  finish.svg
++Artifacts (Artifacts panel):
++  artifact-html.svg    artifact-svg.svg    artifact-markdown.svg
++  artifact.svg         (any other kind)
++Other:
++  skill.svg            (Skills panel)
++  attach.svg           (attach-file button)
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index e8aac35..e041b07 100644
+index e041b07..eeddcda 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -73,8 +73,27 @@
-       grid-template-columns: 240px 1fr;
-       grid-template-rows: 100vh;
-       height: 100vh;
-+      transition: grid-template-columns .2s ease;
+@@ -977,6 +977,12 @@
+       border-color: var(--accent);
      }
  
-+    /* collapsed sidebar: the column closes and the sidebar is hidden from view and focus */
-+    .shell.collapsed {grid-template-columns: 0 1fr}
-+    .shell.collapsed .sidebar {visibility: hidden; border-right: none}
-+    .sidebar {min-width: 0}
++    /* ─── icons: SVG files from home/static/icons/, or a text fallback ─── */
++    .icon {display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
++           width: 1em; height: 1em; margin-right: 0.4em; vertical-align: -0.15em; line-height: 1}
++    .icon svg {width: 100%; height: 100%; display: block}
++    .attach-btn .icon {margin: 0}
 +
-+    .sidebar-toggle {
-+      background: none;
-+      border: none;
-+      color: var(--muted);
-+      cursor: pointer;
-+      display: flex;
-+      padding: 6px;
-+      margin-right: 12px;
-+      border-radius: 6px;
-+    }
-+
-+    .sidebar-toggle:hover {color: var(--accent)}
-+
-     /* ─── sidebar ─── */
-     .sidebar {
-       background: var(--surface);
-@@ -427,6 +446,8 @@
-       cursor: pointer;
-     }
- 
-+    .think .tool-notice {margin-top: 6px}
-+
-     .think div {
-       white-space: pre-wrap;
-       margin-top: 6px;
-@@ -765,6 +786,10 @@
-       transform: scale(0.94);
-     }
- 
-+    .send-btn[hidden] {display: none}
-+    .stop-btn {background: var(--surface2); color: var(--accent)}
-+    .stop-btn:hover {background: var(--user-bg)}
-+
-     .send-btn:disabled {
-       background: var(--surface2);
-       color: var(--muted);
-@@ -1089,7 +1114,7 @@
- 
- <body>
- 
--  <div class="shell">
-+  <div class="shell" id="shell">
- 
-     <!-- sidebar -->
-     <aside class="sidebar">
-@@ -1134,6 +1159,11 @@
-         Latest
-       </button>
-       <div class="topbar">
-+        <button class="sidebar-toggle" onclick="toggleSidebar()" aria-controls="shell" aria-expanded="true" title="Show or hide the sidebar">
-+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-+            <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" />
-+          </svg>
-+        </button>
-         <div class="model-badge">
+     /* ─── tool notices (collapsible) ─── */
+     .tool-notice {
+       border: 1px solid var(--border);
+@@ -1168,7 +1174,7 @@
            <div class="dot"></div>
            <select id="modelSelect">
-@@ -1213,6 +1243,9 @@
-             onclick="document.getElementById('fileInput').click()">📎</button>
+             {% for m in models %}
+-            <option value="{{ m.name }}">{{ m.name }} {{ m.tag }}</option>
++            <option value="{{ m.name }}">{{ m.label }}{% if m.tag %} &nbsp;{{ m.tag }}{% endif %}</option>
+             {% empty %}
+             <option value="">no models found</option>
+             {% endfor %}
+@@ -1240,7 +1246,7 @@
+           <textarea id="msgInput" placeholder="Message Clank.r…" rows="1" onkeydown="handleKey(event)"
+             oninput="autoResize(this)"></textarea>
+           <button class="attach-btn" type="button" title="Attach files (code, text, PDF, images)"
+-            onclick="document.getElementById('fileInput').click()">📎</button>
++            onclick="document.getElementById('fileInput').click()" data-icon="attach"></button>
            <input type="file" id="fileInput" multiple hidden
              accept=".txt,.md,.py,.js,.ts,.html,.css,.json,.csv,.c,.cpp,.h,.java,.rs,.go,.sh,.yml,.yaml,.toml,.tex,.sql,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*">
-+          <button class="send-btn stop-btn" id="stopBtn" type="button" onclick="stopReply()" title="Stop" hidden>
-+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
-+          </button>
-           <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
-             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-               <line x1="12" y1="19" x2="12" y2="5" />
-@@ -1336,6 +1369,7 @@
-   <script>
-     const input = document.getElementById('msgInput');
-     const sendBtn = document.getElementById('sendBtn');
-+    const stopBtn = document.getElementById('stopBtn');
-     const msgs = document.getElementById('messages');
-     const empty = document.getElementById('emptyState');
-     const historyList = document.getElementById('historyList');
-@@ -1358,6 +1392,9 @@
+           <button class="send-btn stop-btn" id="stopBtn" type="button" onclick="stopReply()" title="Stop" hidden>
+@@ -1382,7 +1388,7 @@
+     function renderChips() {
+       const box = document.getElementById('fileChips'); box.innerHTML = '';
+       pendingFiles.forEach((f, i) => {
+-        const c = document.createElement('span'); c.textContent = '📎 ' + f.name + ' ✕';
++        const c = document.createElement('span'); c.textContent = '⊕ ' + f.name + ' ✕';
+         c.title = 'Remove'; c.onclick = () => {pendingFiles.splice(i, 1); renderChips(); updateSend();};
+         box.append(c);
+       });
+@@ -1391,6 +1397,23 @@
+     fileInput.addEventListener('change', () => {
        pendingFiles.push(...fileInput.files); fileInput.value = ''; renderChips(); updateSend();
      });
++
++    // Ctrl+V: a picture on the clipboard is attached like a file
++    const PASTE_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
++    input.addEventListener('paste', e => {
++      const items = [...(e.clipboardData ? e.clipboardData.items : [])]
++        .filter(i => i.kind === 'file' && PASTE_IMAGE_TYPES.includes(i.type));
++      if (!items.length) return;             // plain text pastes as normal
++      e.preventDefault();
++      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
++      items.forEach((item, n) => {
++        const blob = item.getAsFile();
++        if (!blob) return;
++        const ext = item.type.split('/')[1].replace('jpeg', 'jpg');
++        pendingFiles.push(new File([blob], `pasted-${stamp}-${n + 1}.${ext}`, {type: item.type}));
++      });
++      renderChips(); updateSend();
++    });
      let busy = false;   // true while a reply is streaming
-+    let activeCtx = null, activeAbort = null;   // the reply in progress, and its browser-side abort
-+    // busy also swaps the send button for stop
-+    function setBusy(v) { busy = v; stopBtn.hidden = !v; sendBtn.hidden = v; }
+     let activeCtx = null, activeAbort = null;   // the reply in progress, and its browser-side abort
+     // busy also swaps the send button for stop
+@@ -1487,7 +1510,7 @@
+       const data = await resp.json();
  
-     // ─── default model (remembered in this browser) ───
-     defaultSel.innerHTML = modelSel.innerHTML;
-@@ -1425,6 +1462,19 @@
-       historyList.prepend(el);
-     }
+       msgs.innerHTML = '';
+-      data.messages.forEach(m => addMessage(m.content + (m.files && m.files.length ? '\n\n📎 ' + m.files.join(', ') : ''), m.role === 'user' ? 'user' : 'ai'));
++      data.messages.forEach(m => addMessage(m.content + (m.files && m.files.length ? '\n\n⊕ ' + m.files.join(', ') : ''), m.role === 'user' ? 'user' : 'ai'));
+       (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
+       currentChatId = data.id;
+       setActive(data.id);
+@@ -1730,7 +1753,7 @@
  
-+    // ─── sidebar collapse (remembered per browser) ───
-+    function setSidebar(collapsed) {
-+      document.getElementById('shell').classList.toggle('collapsed', collapsed);
-+      document.querySelector('.sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
-+      try { localStorage.setItem('clankr.sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
-+    }
-+
-+    function toggleSidebar() {
-+      setSidebar(!document.getElementById('shell').classList.contains('collapsed'));
-+    }
-+
-+    try { setSidebar(localStorage.getItem('clankr.sidebarCollapsed') === '1'); } catch (e) {}
-+
-     historyList.addEventListener('click', e => {
-       const item = e.target.closest('.history-item');
-       if (item) loadChat(item.dataset.id);
-@@ -1674,6 +1724,7 @@
-     }
- 
-     async function sendMessage() {
-+      if (busy) return;
-       const text = input.value.trim() || (pendingFiles.length ? 'See the attached file(s).' : '');
-       if (!text) return;
- 
-@@ -1683,10 +1734,11 @@
+       const files = pendingFiles;
+       pendingFiles = []; renderChips();
+-      addMessage(text + (files.length ? '\n\n📎 ' + files.map(f => f.name).join(', ') : ''), 'user');
++      addMessage(text + (files.length ? '\n\n⊕ ' + files.map(f => f.name).join(', ') : ''), 'user');
        input.value = '';
        autoResize(input);
        sendBtn.disabled = true;
--      busy = true;
-+      setBusy(true);
+@@ -1863,17 +1886,45 @@
+     }
  
-       // create an empty AI body to stream into
-       const body = addEmptyAiBubble();
-+      if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
- 
-       // one ordered stream: thinking, tool calls, artifacts and answer text
-       // appear in the same order the server sends them
-@@ -1695,7 +1747,9 @@
- 
-       const setStatus = makeStatus(body);
-       setStatus('working', 'Sending', 'orbit');
--      const ctx = {setStatus, step: 0, gotText: false, errored: false, stream, seg: null, segKind: null, text, answerRaw: '', thinkText: '', waiting: false, liveTool: null};
-+      const ctx = {setStatus, step: 0, gotText: false, errored: false, stream, seg: null, segKind: null, chain: null, thinkTail: null, text, answerRaw: '', replyText: '', waiting: false, liveTool: null, stopped: false};
-+      const abort = new AbortController();
-+      activeCtx = ctx; activeAbort = abort;
-       const agent = document.getElementById('agentMode').checked;
-       const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
-       let resp;
-@@ -1705,18 +1759,41 @@
-         for (const [k, v] of Object.entries(fields)) if (v !== null) fd.append(k, v);
-         files.forEach(f => fd.append('files', f));
-         resp = await fetch(agent ? '/agent/send/' : '/send/',
--                           {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body: fd});
-+                           {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body: fd, signal: abort.signal});
-       } else {
--        resp = await postJSON(agent ? '/agent/send/' : '/send/', fields);
-+        resp = await postJSON(agent ? '/agent/send/' : '/send/', fields, abort.signal);
-       }
-       if (!resp.ok) throw new Error(resp.status === 403 ? 'Session expired or CSRF failed (403) — reload the page'
-                                                         : `Server error ${resp.status}`);
-       await consume(resp, ctx);
-       } catch (e) {
--        ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message);
-+        // a stop aborts the browser's read; that is not an error
-+        if (!ctx.stopped) { ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message); }
-+      }
-+      setBusy(false);   // stream closed, even if [DONE] never arrived
-+      activeCtx = null; activeAbort = null;
-+      if (ctx.stopped) ctx.setStatus('done', 'Stopped');
-+      else if (!ctx.errored) finishStatus(ctx);
+     // collapsible notice for one tool call: summary row + streamed code + result
+-    const TOOL_ICONS = {web_search: '🔍', fetch_page: '📄', run_python: '🐍', run_shell: '💻',
+-                        write_file: '📝', read_file: '📂', create_artifact: '🎨',
+-                        load_skill: '🧰', finish: '✅'};
++    // ─── icons ───
++    // Each icon is an SVG file in home/static/icons/ named <key>.svg. A file there is
++    // used automatically; until it exists, the fallback below is shown.
++    // Draw on a 24×24 grid with stroke="currentColor" (or fill) so it follows the theme.
++    const ICON_BASE = "{% static 'icons/' %}";
++    const ICON_FALLBACK = {
++      web_search: '⌕', fetch_page: '↗', run_python: 'λ', run_shell: '$', write_file: '✎',
++      read_file: '▤', create_artifact: '◈', load_skill: '✦', finish: '✓', skill: '✦',
++      'artifact-html': '⟨⟩', 'artifact-svg': '◬', 'artifact-markdown': '≡', artifact: '≡',
++      attach: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.1l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></svg>'
++    };
++    const iconSvg = {};   // key -> SVG markup, filled in when the files load
++    function iconHtml(name) {
++      const body = iconSvg[name] || ICON_FALLBACK[name];
++      return body ? `<span class="icon" aria-hidden="true">${body}</span>` : '';
 +    }
-+
-+    // stop the reply in progress: the browser stops reading now, and the server
-+    // is told to stop generating and keep what was written so far
-+    function stopReply() {
-+      if (!busy) return;
-+      const ctx = activeCtx;
-+      if (ctx) ctx.stopped = true;
-+      if (currentChatId) {
-+        fetch('/stop/', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
-+                         body: JSON.stringify({chat_id: currentChatId})}).catch(() => {});
-+      }
-+      if (activeAbort) {
-+        activeAbort.abort();
-+      } else {
-+        // waiting for approval: no stream is open, so finish the turn here
-+        document.querySelectorAll('.approval').forEach(c => {c.classList.add('done'); c.querySelectorAll('button').forEach(b => b.disabled = true);});
-+        setBusy(false);
-+        if (ctx) { ctx.waiting = false; ctx.setStatus('done', 'Stopped'); }
-       }
--      busy = false;   // stream closed, even if [DONE] never arrived
--      if (!ctx.errored) finishStatus(ctx);
-     }
- 
-     // called when a stream ends: say what state we ended in
-@@ -1728,13 +1805,23 @@
-       // finished (if unsatisfying) turn, so the swarm dissolves like any done
-       else if (!ctx.gotText) ctx.setStatus('done', 'Finished, but the model returned no text', 'done');
-       else ctx.setStatus('done', 'Done');
-+      if (ctx.sawDone) notifyDone(ctx);
++    const kindIcon = k => iconHtml(['html', 'svg', 'markdown'].includes(k) ? 'artifact-' + k : 'artifact');
++    // elements with data-icon="<key>" get their icon
++    function fillIcons() {
++      document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = iconHtml(el.dataset.icon); });
 +    }
-+
-+    // send a desktop notification when a reply finishes while Clank.r is in the background
-+    function notifyDone(ctx) {
-+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
-+      if (document.visibilityState === 'visible' && document.hasFocus()) return;
-+      const preview = (ctx.replyText || 'Your reply is ready.').replace(/\s+/g, ' ').trim().slice(0, 140);
-+      const n = new Notification('Clank.r', {body: preview, tag: 'clankr-reply'});
-+      n.onclick = () => { window.focus(); n.close(); };
-     }
- 
--    function postJSON(url, body) {
-+    function postJSON(url, body, signal) {
-       return fetch(url, {
-         method: 'POST',
-         headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
--        body: JSON.stringify(body)
-+        body: JSON.stringify(body), signal
-       });
-     }
- 
-@@ -1753,7 +1840,7 @@
-       card.innerHTML = `<b>Permission needed:</b> <code>${escHtml(ev.name)}</code><pre>${escHtml(String(arg))}</pre>`;
-       const decide = async (approve, always) => {
-         card.classList.add('done'); card.querySelectorAll('button').forEach(b => b.disabled = true);
--        busy = true; sendBtn.disabled = true; ctx.waiting = false;
-+        setBusy(true); sendBtn.disabled = true; ctx.waiting = false;
-         try {
-           const r = await postJSON('/agent/approve/', {run_id: ev.run_id, approve, always});
-           if (!r.ok) throw new Error(`Server error ${r.status}`);
-@@ -1766,7 +1853,7 @@
-         } catch (e) {
-           ctx.errored = true; ctx.setStatus('error', 'Error: ' + e.message);
-         }
--        busy = false;
-+        setBusy(false);
-       };
-       for (const [label, ap, al] of [['Allow', true, false], ['Always allow this tool', true, true], ['Deny', false, false]]) {
-         const b = document.createElement('button'); b.textContent = label;
-@@ -1797,41 +1884,64 @@
-       s.classList.toggle('err', !!err);
-     }
- 
--    // ordered-stream helpers: the current thinking/answer block stays open only
--    // until something else arrives after it, so later text lands below earlier tools
-+    // Ordered stream. Thinking and the tool calls made while thinking share one
-+    // collapsible "chain", in the order they happened (think → tool → think ...).
-+    // The chain closes to "Thought" once the answer text starts. Artifacts and
-+    // approval cards are full-width blocks in the stream, so they close the chain.
-     function closeThink(ctx) {
--      if (ctx.segKind === 'think' && ctx.seg) {
--        ctx.seg.open = false;
--        ctx.seg.firstChild.textContent = 'Thought';
-+      if (ctx.chain) {
-+        ctx.chain.open = false;
-+        ctx.chain.firstChild.textContent = 'Thought';
-+        ctx.chain = null; ctx.thinkTail = null;
-       }
-     }
- 
--    function openSegment(ctx, kind) {
--      if (ctx.segKind === kind && ctx.seg) return ctx.seg;
--      closeThink(ctx);
--      if (kind === 'think') {
--        ctx.seg = document.createElement('details');
--        ctx.seg.className = 'think';
--        ctx.seg.innerHTML = '<summary>Thinking…</summary><div></div>';
--        ctx.seg.open = true;
--        ctx.thinkText = '';
--      } else {
--        ctx.seg = document.createElement('div');
--        ctx.seg.className = 'answer';
--        ctx.answerRaw = '';
-+    function chainFor(ctx) {
-+      if (!ctx.chain) {
-+        ctx.chain = document.createElement('details');
-+        ctx.chain.className = 'think';
-+        ctx.chain.innerHTML = '<summary>Thinking…</summary>';
-+        ctx.chain.open = true;
-+        ctx.thinkTail = null;
-+        ctx.stream.append(ctx.chain);
-       }
--      ctx.segKind = kind;
--      ctx.stream.append(ctx.seg);
--      return ctx.seg;
-+      return ctx.chain;
-     }
- 
--    // appends a tool notice, artifact or approval card where it happened
--    function appendTool(ctx, el) {
-+    // thinking text: appended to the chain, continuing the current text piece
-+    function addThinking(ctx, text) {
-+      const chain = chainFor(ctx);
-+      if (!ctx.thinkTail) { ctx.thinkTail = document.createElement('div'); chain.append(ctx.thinkTail); }
-+      ctx.thinkTail.textContent += text;
-+      ctx.segKind = 'think';
++    async function loadIcons() {
++      await Promise.all(Object.keys(ICON_FALLBACK).map(async name => {
++        try {
++          const r = await fetch(ICON_BASE + name + '.svg');
++          if (r.ok) iconSvg[name] = (await r.text()).trim().replace(/<script[\s\S]*?<\/script>/gi, '');
++        } catch (e) { /* keep the fallback */ }
++      }));
++      fillIcons();
 +    }
-+
-+    // a tool call sits in the chain, where the thinking that led to it is
-+    function addToolNotice(ctx, el) {
-+      chainFor(ctx).append(el);
-+      ctx.thinkTail = null;          // thinking after the tool starts a new piece below it
-+      ctx.segKind = 'think';
-+    }
-+
-+    // artifacts and approval cards: full-width blocks in the stream
-+    function appendBlock(ctx, el) {
-       closeThink(ctx);
--      ctx.segKind = 'tool'; ctx.seg = null;
-+      ctx.segKind = 'block'; ctx.seg = null;
-       ctx.stream.append(el);
++    fillIcons();
++    loadIcons();
+ 
+     function makeToolNotice(tool) {
+       const d = document.createElement('details');
+       d.className = 'tool-notice';
+       d.dataset.name = tool.name;
+-      const label = (TOOL_ICONS[tool.name] || '') + ' ' + tool.name +
+-                    (tool.arg ? ': ' + String(tool.arg).slice(0, 80) : '');
+-      d.innerHTML = `<summary><span class="tn-label">${escHtml(label)}</span><span class="tn-status">running…</span></summary>
++      const label = tool.name + (tool.arg ? ': ' + String(tool.arg).slice(0, 80) : '');
++      d.innerHTML = `<summary><span class="tn-label">${iconHtml(tool.name)}${escHtml(label)}</span><span class="tn-status">running…</span></summary>
+         <pre class="tn-code"><code></code></pre><pre class="tn-out"></pre>`;
+       return d;
      }
- 
-+    // the answer: a new block whenever something else came after the last one
-+    function answerBlock(ctx) {
-+      if (ctx.segKind === 'answer' && ctx.seg) return ctx.seg;
-+      closeThink(ctx);
-+      ctx.seg = document.createElement('div');
-+      ctx.seg.className = 'answer';
-+      ctx.answerRaw = '';
-+      ctx.segKind = 'answer';
-+      ctx.stream.append(ctx.seg);
-+      return ctx.seg;
-+    }
-+
-     // reads one SSE stream into the AI body described by ctx
-     async function consume(resp, ctx) {
-       ctx.sawDone = false;
-@@ -1849,7 +1959,7 @@
-         for (const line of lines) {
-           if (!line.startsWith('data: ')) continue;
-           const payload = line.slice(6);
--          if (payload === '[DONE]') {ctx.sawDone = true;sendBtn.disabled = ctx.waiting; busy = ctx.waiting; break;}
-+          if (payload === '[DONE]') {ctx.sawDone = true;sendBtn.disabled = ctx.waiting; setBusy(ctx.waiting); break;}
- 
-           const data = JSON.parse(payload);
-           if (data.error) {ctx.errored = true; ctx.setStatus('error', 'Error: ' + data.error);}
-@@ -1863,9 +1973,7 @@
-           }
-           if (data.thinking) {
-             if (!ctx.errored) ctx.setStatus('working', 'Thinking', 'orbit');
--            const d = openSegment(ctx, 'think');
--            ctx.thinkText += data.thinking;
--            d.lastChild.textContent = ctx.thinkText;
-+            addThinking(ctx, data.thinking);
-           }
-           if (data.tool_arg) {
-             // the model is typing a tool call — show the code as it streams in
-@@ -1873,7 +1981,7 @@
-             if (!ctx.liveTool || ctx.liveTool.dataset.name !== data.tool_arg.name) {
-               ctx.liveTool = makeToolNotice({name: data.tool_arg.name, arg: ''});
-               ctx.liveTool.open = true;          // open while typing so the code is visible
--              appendTool(ctx, ctx.liveTool);
-+              addToolNotice(ctx, ctx.liveTool);
-             }
-             ctx.liveTool.querySelector('.tn-code code').textContent += data.tool_arg.delta;
-           }
-@@ -1883,7 +1991,7 @@
-               ctx.liveTool.querySelector('.tn-code code').textContent = String(data.tool.arg || '');
-             } else {
-               ctx.liveTool = makeToolNotice(data.tool);
--              appendTool(ctx, ctx.liveTool);
-+              addToolNotice(ctx, ctx.liveTool);
-             }
-           }
-           if (data.result) {
-@@ -1895,21 +2003,22 @@
-               ctx.liveTool = null;
-             }
-           }
--          if (data.artifact) appendTool(ctx, artifactFrame(data.artifact));
-+          if (data.artifact) appendBlock(ctx, artifactFrame(data.artifact));
-           if (data.approval) {
-             ctx.setStatus('waiting', 'Waiting for your approval', 'wait');
--            appendTool(ctx, approvalCard(data.approval, ctx)); ctx.waiting = true;}
-+            appendBlock(ctx, approvalCard(data.approval, ctx)); ctx.waiting = true;}
-           if (data.token) {
-             ctx.gotText = true; if (!ctx.errored) ctx.setStatus('working', 'Writing', 'orbit');
--            const a = openSegment(ctx, 'answer');   // also collapses the thinking block above it
--            ctx.answerRaw += data.token;
-+            const a = answerBlock(ctx);             // also closes the thinking chain above it
-+            ctx.answerRaw += data.token; ctx.replyText += data.token;
-             a.innerHTML = renderMarkdown(ctx.answerRaw);
-             enhanceCode(a);
-           }
-           if (data.done && data.done.summary && !ctx.gotText) {
-             ctx.gotText = true;
--            const a = openSegment(ctx, 'answer');
-+            const a = answerBlock(ctx);
-             ctx.answerRaw += (ctx.answerRaw ? '\n\n' : '') + '**Done:** ' + data.done.summary;
-+            ctx.replyText += data.done.summary;
-             a.innerHTML = renderMarkdown(ctx.answerRaw);
-             enhanceCode(a);
-           }
-diff --git a/pyggie/home/urls.py b/pyggie/home/urls.py
-index 009f3be..3d8c8ae 100644
---- a/pyggie/home/urls.py
-+++ b/pyggie/home/urls.py
-@@ -8,6 +8,7 @@ urlpatterns = [
-     path('send/',               views.send_message, name='send_message'),
-     path('agent/send/',    views.agent_send,    name='agent_send'),
-     path('agent/approve/', views.agent_approve, name='agent_approve'),
-+    path('stop/',               views.stop_reply,  name='stop_reply'),
-     path('artifact/<int:artifact_id>/', views.artifact_view, name='artifact'),
-     # artifacts & skills panels
-     path('artifacts/',       views.artifacts_list,  name='artifacts_list'),
+@@ -2121,10 +2172,9 @@
+         const d = await r.json();
+         box.innerHTML = '';
+         if (!d.artifacts.length) { box.innerHTML = '<div class="history-empty">No artifacts yet</div>'; return; }
+-        const icons = {html: '🌐', svg: '📐', markdown: '📄'};
+-        d.artifacts.forEach(a => {
++            d.artifacts.forEach(a => {
+           const el = document.createElement('div'); el.className = 'panel-row';
+-          el.innerHTML = `<div class="pr-main"><span class="pr-title">${icons[a.kind] || '📄'} ${escHtml(a.title)}</span>` +
++          el.innerHTML = `<div class="pr-main"><span class="pr-title">${kindIcon(a.kind)} ${escHtml(a.title)}</span>` +
+                           `<span class="pr-sub">${escHtml(a.kind)} · ${escHtml(a.chat_title || '')}</span></div>`;
+           const open = document.createElement('button'); open.className = 'pr-btn'; open.textContent = 'Open';
+           open.onclick = e => { e.stopPropagation(); window.open(`/artifact/${a.id}/`, '_blank'); };
+@@ -2175,7 +2225,7 @@
+         if (!d.skills.length) { box.innerHTML = '<div class="history-empty">No skills yet</div>'; return; }
+         d.skills.forEach(s => {
+           const el = document.createElement('div'); el.className = 'panel-row';
+-          el.innerHTML = `<div class="pr-main"><span class="pr-title">🧰 ${escHtml(s.name)}</span>` +
++          el.innerHTML = `<div class="pr-main"><span class="pr-title">${iconHtml('skill')} ${escHtml(s.name)}</span>` +
+                           `<span class="pr-sub">${escHtml(s.description)}</span></div>` +
+                           `<div class="pr-body">${escHtml(s.body)}</div>`;
+           el.onclick = () => el.classList.toggle('open');
 diff --git a/pyggie/home/views.py b/pyggie/home/views.py
-index 7b78444..eb60a88 100644
+index eb60a88..9849727 100644
 --- a/pyggie/home/views.py
 +++ b/pyggie/home/views.py
-@@ -8,9 +8,18 @@ from django.shortcuts import render, get_object_or_404
- from .models import Chat, Message, AgentRun, Artifact
- from . import agent, files
- from django.http import HttpResponse
-+from django.core.cache import cache
- from . import ollama
- 
- 
-+def _stop_key(chat_id):
-+    return f"clankr-stop:{chat_id}"
-+
-+
-+def _stop_requested(chat_id):
-+    return cache.get(_stop_key(chat_id)) is not None
-+
-+
- def _parse(request):
-     """JSON body, or multipart form (text fields + 'files')."""
-     if request.content_type and request.content_type.startswith('multipart'):
-@@ -49,6 +58,7 @@ def send_message(request):
-     msg = Message.objects.create(chat=chat, role='user', content=content)
-     upload_errors = files.save_attachments(msg, uploads)
-     history = files.build_history(chat, ollama.get_caps(model))
-+    cache.delete(_stop_key(chat.id))
- 
-     full_reply = []
- 
-@@ -58,17 +68,23 @@ def send_message(request):
+@@ -66,7 +66,7 @@ def send_message(request):
+         # first chunk: send the chat_id so the frontend knows which chat this is
+         yield f"data: {json.dumps({'chat_id': chat.id})}\n\n"
          if upload_errors:
-             yield f"data: {json.dumps({'token': '> ⚠️ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
+-            yield f"data: {json.dumps({'token': '> ⚠️ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
++            yield f"data: {json.dumps({'token': '> △ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
  
--        # kind is 'token', 'thinking' or 'tool'; only the answer is saved
-+        # kind is 'token', 'thinking' or 'tool'; only the answer is saved.
-+        # finally: whatever was written is saved, even when stopped or disconnected
-+        replies = ollama.chat_stream(model=model, messages=history)
-         try:
--            for kind, value in ollama.chat_stream(model=model, messages=history):
-+            for kind, value in replies:
-+                if _stop_requested(chat.id):
-+                    break                      # the user pressed stop
-                 if kind == 'token':
-                     full_reply.append(value)
-                 yield f"data: {json.dumps({kind: value})}\n\n"
-         except Exception as e:
-             yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
--
--        if full_reply:
--            Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
-+        finally:
-+            replies.close()                    # closes the connection to Ollama
-+            cache.delete(_stop_key(chat.id))
-+            if ''.join(full_reply).strip():
-+                Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
-         yield "data: [DONE]\n\n"
- 
-     return StreamingHttpResponse(stream(), content_type='text/event-stream')
-@@ -79,15 +95,25 @@ def _agent_stream(run, chat, gen, prefix_events=()):
-     texts = []
-     def stream():
-         yield f"data: {json.dumps({'chat_id': chat.id, 'run_id': run.id})}\n\n"
-+        stopped = False
-         try:
-             for kind, value in gen:
-+                if _stop_requested(chat.id):
-+                    stopped = True
-+                    break                      # the user pressed stop
-                 if kind == 'token': texts.append(value)
-                 yield f"data: {json.dumps({kind: value})}\n\n"
-         except Exception as e:
-             yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
--        run.save()
--        if ''.join(texts).strip():
--            Message.objects.create(chat=chat, role='ai', content=''.join(texts))
-+        finally:
-+            # runs even if the browser disconnects mid-stream, so the reply is kept
-+            gen.close()
-+            cache.delete(_stop_key(chat.id))
-+            if stopped:
-+                run.status, run.pending = 'stopped', []
-+            run.save()
-+            if ''.join(texts).strip():
-+                Message.objects.create(chat=chat, role='ai', content=''.join(texts))
-         yield "data: [DONE]\n\n"
-     return StreamingHttpResponse(stream(), content_type='text/event-stream')
- 
-@@ -102,6 +128,7 @@ def agent_send(request):
-         chat = Chat.objects.create(user=request.user, title=content[:60])
-     msg = Message.objects.create(chat=chat, role='user', content=content)
-     upload_errors = files.save_attachments(msg, uploads)
-+    cache.delete(_stop_key(chat.id))
-     agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
-     history = files.build_history(chat, ollama.get_caps(model))
+         # kind is 'token', 'thinking' or 'tool'; only the answer is saved.
+         # finally: whatever was written is saved, even when stopped or disconnected
+@@ -134,7 +134,7 @@ def agent_send(request):
      run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
-@@ -123,6 +150,18 @@ def agent_approve(request):
-         yield from agent.drive(run, run.model)
-     return _agent_stream(run, run.chat, gen())
- 
-+@login_required
-+@require_POST
-+def stop_reply(request):
-+    """Ask the reply in progress in this chat to stop. The running stream checks
-+    this flag between chunks; a run waiting for approval is ended right here."""
-+    data = json.loads(request.body)
-+    chat = get_object_or_404(Chat, id=data.get('chat_id'), user=request.user)
-+    cache.set(_stop_key(chat.id), True, timeout=300)
-+    AgentRun.objects.filter(chat=chat, status='running').update(status='stopped', pending=[])
-+    return JsonResponse({'ok': True})
-+
-+
- @login_required
- @xframe_options_exempt        # the UI previews artifacts in a sandboxed iframe; a
-                                # frame-deny header made browsers show their
+     def gen():
+         if upload_errors:
+-            yield 'token', '> ⚠️ ' + '; '.join(upload_errors) + '\n\n'
++            yield 'token', '> △ ' + '; '.join(upload_errors) + '\n\n'
+         yield from agent.drive(run, model)
+     return _agent_stream(run, chat, gen())
