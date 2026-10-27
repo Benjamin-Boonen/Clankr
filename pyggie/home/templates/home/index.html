@@ -977,6 +977,12 @@
       border-color: var(--accent);
     }
 
+    /* ─── icons: SVG files from home/static/icons/, or a text fallback ─── */
+    .icon {display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+           width: 1em; height: 1em; margin-right: 0.4em; vertical-align: -0.15em; line-height: 1}
+    .icon svg {width: 100%; height: 100%; display: block}
+    .attach-btn .icon {margin: 0}
+
     /* ─── tool notices (collapsible) ─── */
     .tool-notice {
       border: 1px solid var(--border);
@@ -1240,7 +1246,7 @@
           <textarea id="msgInput" placeholder="Message Clank.r…" rows="1" onkeydown="handleKey(event)"
             oninput="autoResize(this)"></textarea>
           <button class="attach-btn" type="button" title="Attach files (code, text, PDF, images)"
-            onclick="document.getElementById('fileInput').click()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.1l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></svg></button>
+            onclick="document.getElementById('fileInput').click()" data-icon="attach"></button>
           <input type="file" id="fileInput" multiple hidden
             accept=".txt,.md,.py,.js,.ts,.html,.css,.json,.csv,.c,.cpp,.h,.java,.rs,.go,.sh,.yml,.yaml,.toml,.tex,.sql,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*">
           <button class="send-btn stop-btn" id="stopBtn" type="button" onclick="stopReply()" title="Stop" hidden>
@@ -1880,17 +1886,45 @@
     }
 
     // collapsible notice for one tool call: summary row + streamed code + result
-    const TOOL_ICONS = {web_search: '⌕', fetch_page: '↗', run_python: 'λ', run_shell: '$',
-                        write_file: '✎', read_file: '▤', create_artifact: '◈',
-                        load_skill: '✦', finish: '✓'};
+    // ─── icons ───
+    // Each icon is an SVG file in home/static/icons/ named <key>.svg. A file there is
+    // used automatically; until it exists, the fallback below is shown.
+    // Draw on a 24×24 grid with stroke="currentColor" (or fill) so it follows the theme.
+    const ICON_BASE = "{% static 'icons/' %}";
+    const ICON_FALLBACK = {
+      web_search: '⌕', fetch_page: '↗', run_python: 'λ', run_shell: '$', write_file: '✎',
+      read_file: '▤', create_artifact: '◈', load_skill: '✦', finish: '✓', skill: '✦',
+      'artifact-html': '⟨⟩', 'artifact-svg': '◬', 'artifact-markdown': '≡', artifact: '≡',
+      attach: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.1l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></svg>'
+    };
+    const iconSvg = {};   // key -> SVG markup, filled in when the files load
+    function iconHtml(name) {
+      const body = iconSvg[name] || ICON_FALLBACK[name];
+      return body ? `<span class="icon" aria-hidden="true">${body}</span>` : '';
+    }
+    const kindIcon = k => iconHtml(['html', 'svg', 'markdown'].includes(k) ? 'artifact-' + k : 'artifact');
+    // elements with data-icon="<key>" get their icon
+    function fillIcons() {
+      document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = iconHtml(el.dataset.icon); });
+    }
+    async function loadIcons() {
+      await Promise.all(Object.keys(ICON_FALLBACK).map(async name => {
+        try {
+          const r = await fetch(ICON_BASE + name + '.svg');
+          if (r.ok) iconSvg[name] = (await r.text()).trim().replace(/<script[\s\S]*?<\/script>/gi, '');
+        } catch (e) { /* keep the fallback */ }
+      }));
+      fillIcons();
+    }
+    fillIcons();
+    loadIcons();
 
     function makeToolNotice(tool) {
       const d = document.createElement('details');
       d.className = 'tool-notice';
       d.dataset.name = tool.name;
-      const label = (TOOL_ICONS[tool.name] || '') + ' ' + tool.name +
-                    (tool.arg ? ': ' + String(tool.arg).slice(0, 80) : '');
-      d.innerHTML = `<summary><span class="tn-label">${escHtml(label)}</span><span class="tn-status">running…</span></summary>
+      const label = tool.name + (tool.arg ? ': ' + String(tool.arg).slice(0, 80) : '');
+      d.innerHTML = `<summary><span class="tn-label">${iconHtml(tool.name)}${escHtml(label)}</span><span class="tn-status">running…</span></summary>
         <pre class="tn-code"><code></code></pre><pre class="tn-out"></pre>`;
       return d;
     }
@@ -2138,10 +2172,9 @@
         const d = await r.json();
         box.innerHTML = '';
         if (!d.artifacts.length) { box.innerHTML = '<div class="history-empty">No artifacts yet</div>'; return; }
-        const icons = {html: '⟨⟩', svg: '◬', markdown: '≡'};
-        d.artifacts.forEach(a => {
+            d.artifacts.forEach(a => {
           const el = document.createElement('div'); el.className = 'panel-row';
-          el.innerHTML = `<div class="pr-main"><span class="pr-title">${icons[a.kind] || '≡'} ${escHtml(a.title)}</span>` +
+          el.innerHTML = `<div class="pr-main"><span class="pr-title">${kindIcon(a.kind)} ${escHtml(a.title)}</span>` +
                           `<span class="pr-sub">${escHtml(a.kind)} · ${escHtml(a.chat_title || '')}</span></div>`;
           const open = document.createElement('button'); open.className = 'pr-btn'; open.textContent = 'Open';
           open.onclick = e => { e.stopPropagation(); window.open(`/artifact/${a.id}/`, '_blank'); };
@@ -2192,7 +2225,7 @@
         if (!d.skills.length) { box.innerHTML = '<div class="history-empty">No skills yet</div>'; return; }
         d.skills.forEach(s => {
           const el = document.createElement('div'); el.className = 'panel-row';
-          el.innerHTML = `<div class="pr-main"><span class="pr-title">✦ ${escHtml(s.name)}</span>` +
+          el.innerHTML = `<div class="pr-main"><span class="pr-title">${iconHtml('skill')} ${escHtml(s.name)}</span>` +
                           `<span class="pr-sub">${escHtml(s.description)}</span></div>` +
                           `<div class="pr-body">${escHtml(s.body)}</div>`;
           el.onclick = () => el.classList.toggle('open');
