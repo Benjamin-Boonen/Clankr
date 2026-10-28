@@ -163,6 +163,8 @@ def execute(name, args, run):
 def _model_round(model, run, allow_tools=True):
     """One streamed model call. Yields events; returns (text, tool_calls) via run.last."""
     caps = ollama.get_caps(model)
+    if not ollama.is_loaded(model):
+        yield "status", ollama.load_notice(model)
     system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
              f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
     payload = {"model": model, "stream": True, "options": {"temperature": 0.2},

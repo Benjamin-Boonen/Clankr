@@ -1,5 +1,17 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Status updates (Claude, 2026-10-28)** — new generic SSE event `{"status": "<text>"}`: the frontend shows it on the
+> status line (handled next to `data.step` in the stream reader).
+> - Server emits it for: `Describing image [i/n] with <vision model>…` (vision relay), and
+>   `Loading <model> into memory (the first reply is slower)…` when `/api/ps` says the model isn't loaded yet
+>   (`ollama.is_loaded`, `ollama.load_notice`; used by `chat_stream` and `agent._model_round`).
+> - `views._prepare_history()` (generator; `history = yield from …`) now builds the history INSIDE the stream so
+>   statuses can be sent; `views._as_sse()` forwards its events. `agent_send` creates the run with empty `msgs` and fills them in `gen()`.
+> - `files.images_to_describe()`, and `build_history(..., errors=)` so a failing vision model isn't retried in one request.
+> - Frontend `toolStatus()`: "Searching the web: <query>", "Reading <host>", "Running Python code", … instead of
+>   "Running web_search"; after a tool result: "Reading the result" instead of "Continuing".
+> Tested with a mock Ollama (plain + agent paths) and in Chromium. Ideas not done: step counter "Step 3/15", elapsed time.
+
 > **Vision relay (Claude, 2026-10-28)** — an image-reader model describes images for the chat model.
 > - `ollama.describe_image(model, b64)`: non-streaming `/api/chat` call with `VISION_PROMPT`.
 > - `files.build_history(chat, caps, vision_model="")`: if `vision_model` is set, every image is described by it

@@ -56,11 +56,21 @@ def _describe(a, vision_model):
     return desc
 
 
-def build_history(chat, caps=(), vision_model=""):
+def images_to_describe(chat, vision_model):
+    """Image attachments of this chat that the vision model has not described yet."""
+    return [a for m in chat.messages.filter(role="user").prefetch_related("attachments")
+            for a in m.attachments.all()
+            if a.kind == "image" and not a.text.startswith(vision_model + "\0")]
+
+
+def build_history(chat, caps=(), vision_model="", errors=None):
     """Chat history for the model, with attachments folded into the user messages.
 
     Images: if `vision_model` is set, it describes each image first and the chat model only
-    receives that text. Otherwise images go straight to the chat model if it can see them."""
+    receives that text. Otherwise images go straight to the chat model if it can see them.
+    `errors` maps attachment id -> reason, for images whose description already failed
+    (so a failing vision model is not retried within the same request)."""
+    errors = errors or {}
     out = []
     for m in chat.messages.filter(role__in=["user", "ai"]).prefetch_related("attachments"):
         if m.role == "ai":
@@ -70,6 +80,7 @@ def build_history(chat, caps=(), vision_model=""):
             if a.kind == "image":
                 if vision_model:
                     try:
+                        if a.id in errors: raise RuntimeError(errors[a.id])
                         content += f"\n\n[Attached image {a.name}, described by a vision model:]\n{_describe(a, vision_model)}"
                     except Exception as e:
                         content += f"\n\n[Attached image {a.name}: the vision model could not describe it ({ollama.friendly_error(e)})]"

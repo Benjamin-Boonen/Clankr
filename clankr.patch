@@ -1,192 +1,269 @@
-From c510ef71bc10872b02a096cc736779d084fe71a0 Mon Sep 17 00:00:00 2001
+From 5ba7fffaa7a4fa2bc654eb61ce041d803d57c764 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Wed, 28 Oct 2026 12:03:11 +0100
-Subject: [PATCH] Add vision relay: a chosen vision model describes images for
- the chat model
+Date: Wed, 28 Oct 2026 12:07:42 +0100
+Subject: [PATCH] More useful status updates: status event, image description,
+ model loading, tool wording
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-- ollama.describe_image(); files.build_history(vision_model=...) with per-attachment cache
-- views: accept vision_model on /send/ and /agent/send/
-- Settings: "Image reader (vision model)" dropdown (vision-capable models only)
+- New SSE event {"status": text} shown on the status line
+- Vision relay now reports "Describing image with <model>…"
+- Announce "Loading <model> into memory" when Ollama hasn't loaded it yet (/api/ps)
+- History is built inside the stream (views._prepare_history) so statuses can be sent
+- toolStatus(): "Searching the web: <query>", "Reading <host>" etc. instead of internal tool names
 - CHANGES.md: document
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01PYWF5DEBkW3yKS3tvDRXHL
 ---
- CHANGES.md                            | 12 ++++++++++++
- pyggie/home/files.py                  | 28 ++++++++++++++++++++++++---
- pyggie/home/ollama.py                 | 15 ++++++++++++++
- pyggie/home/templates/home/index.html | 21 +++++++++++++++++++-
- pyggie/home/views.py                  |  4 ++--
- 5 files changed, 74 insertions(+), 6 deletions(-)
+ CHANGES.md                            | 12 ++++++++
+ pyggie/home/agent.py                  |  2 ++
+ pyggie/home/files.py                  | 15 ++++++++--
+ pyggie/home/ollama.py                 | 18 ++++++++++++
+ pyggie/home/templates/home/index.html | 22 +++++++++++++--
+ pyggie/home/views.py                  | 40 ++++++++++++++++++++++++---
+ 6 files changed, 101 insertions(+), 8 deletions(-)
 
 diff --git a/CHANGES.md b/CHANGES.md
-index ff496d4..cd6db06 100644
+index cd6db06..a6ccf5d 100644
 --- a/CHANGES.md
 +++ b/CHANGES.md
 @@ -1,5 +1,17 @@
  # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
  
-+> **Vision relay (Claude, 2026-10-28)** — an image-reader model describes images for the chat model.
-+> - `ollama.describe_image(model, b64)`: non-streaming `/api/chat` call with `VISION_PROMPT`.
-+> - `files.build_history(chat, caps, vision_model="")`: if `vision_model` is set, every image is described by it
-+>   and the chat model only receives that text (no `images` field), even if the chat model could see. Empty = old
-+>   behaviour. Descriptions are cached in `Attachment.text` as `<vision model>\0<description>` (no migration;
-+>   changing the vision model re-describes). Failure → a note in the prompt, not a crash.
-+> - `views.send_message` / `agent_send`: read the `vision_model` request field.
-+> - UI: Settings → "Image reader (vision model)", lists only ◉ models, saved in `localStorage['Clank.r.visionModel']`,
-+>   sent as `vision_model` with each message.
-+> Tested with a mock Ollama (relay, cache on follow-up, off = old behaviour, failure note) and the dropdown in Chromium.
-+> Not tested with real models. Known gap: no "describing image…" status while the vision call runs (UI shows "Sending").
++> **Status updates (Claude, 2026-10-28)** — new generic SSE event `{"status": "<text>"}`: the frontend shows it on the
++> status line (handled next to `data.step` in the stream reader).
++> - Server emits it for: `Describing image [i/n] with <vision model>…` (vision relay), and
++>   `Loading <model> into memory (the first reply is slower)…` when `/api/ps` says the model isn't loaded yet
++>   (`ollama.is_loaded`, `ollama.load_notice`; used by `chat_stream` and `agent._model_round`).
++> - `views._prepare_history()` (generator; `history = yield from …`) now builds the history INSIDE the stream so
++>   statuses can be sent; `views._as_sse()` forwards its events. `agent_send` creates the run with empty `msgs` and fills them in `gen()`.
++> - `files.images_to_describe()`, and `build_history(..., errors=)` so a failing vision model isn't retried in one request.
++> - Frontend `toolStatus()`: "Searching the web: <query>", "Reading <host>", "Running Python code", … instead of
++>   "Running web_search"; after a tool result: "Reading the result" instead of "Continuing".
++> Tested with a mock Ollama (plain + agent paths) and in Chromium. Ideas not done: step counter "Step 3/15", elapsed time.
 +
- > **Attach-icon fix (Claude, 2026-10-28)**: `.attach-btn` set no `color`, so its `currentColor` icon fell back to the
- > browser's black button text. It now uses `var(--muted)` (hover `var(--accent)`) and is larger (font-size 1.1rem → 1.6rem).
- 
+ > **Vision relay (Claude, 2026-10-28)** — an image-reader model describes images for the chat model.
+ > - `ollama.describe_image(model, b64)`: non-streaming `/api/chat` call with `VISION_PROMPT`.
+ > - `files.build_history(chat, caps, vision_model="")`: if `vision_model` is set, every image is described by it
+diff --git a/pyggie/home/agent.py b/pyggie/home/agent.py
+index be87550..36ffa93 100644
+--- a/pyggie/home/agent.py
++++ b/pyggie/home/agent.py
+@@ -163,6 +163,8 @@ def execute(name, args, run):
+ def _model_round(model, run, allow_tools=True):
+     """One streamed model call. Yields events; returns (text, tool_calls) via run.last."""
+     caps = ollama.get_caps(model)
++    if not ollama.is_loaded(model):
++        yield "status", ollama.load_notice(model)
+     system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
+              f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
+     payload = {"model": model, "stream": True, "options": {"temperature": 0.2},
 diff --git a/pyggie/home/files.py b/pyggie/home/files.py
-index 9a07c86..cd5b379 100644
+index cd5b379..df9a831 100644
 --- a/pyggie/home/files.py
 +++ b/pyggie/home/files.py
-@@ -1,6 +1,7 @@
- # home/files.py — turn uploaded files into something the model can read
- import base64, io
- from .models import Attachment
-+from . import ollama
- 
- MAX_BYTES = 10 * 1024 * 1024     # per file
- MAX_FILES = 5
-@@ -42,8 +43,24 @@ def save_attachments(message, uploads):
-     return errors
+@@ -56,11 +56,21 @@ def _describe(a, vision_model):
+     return desc
  
  
--def build_history(chat, caps=()):
--    """Chat history for the model, with attachments folded into the user messages."""
-+def _describe(a, vision_model):
-+    """Description of an image attachment from the chosen vision model, cached on the attachment
-+    (Attachment.text, stored as '<vision model>\\0<description>', so a new vision model re-describes)."""
-+    if a.text.startswith(vision_model + "\0"):
-+        return a.text.split("\0", 1)[1]
-+    desc = ollama.describe_image(vision_model, a.image_b64)
-+    if not desc:
-+        raise RuntimeError("the vision model returned no description")
-+    a.text = vision_model + "\0" + desc
-+    a.save(update_fields=["text"])
-+    return desc
+-def build_history(chat, caps=(), vision_model=""):
++def images_to_describe(chat, vision_model):
++    """Image attachments of this chat that the vision model has not described yet."""
++    return [a for m in chat.messages.filter(role="user").prefetch_related("attachments")
++            for a in m.attachments.all()
++            if a.kind == "image" and not a.text.startswith(vision_model + "\0")]
 +
 +
-+def build_history(chat, caps=(), vision_model=""):
-+    """Chat history for the model, with attachments folded into the user messages.
-+
-+    Images: if `vision_model` is set, it describes each image first and the chat model only
-+    receives that text. Otherwise images go straight to the chat model if it can see them."""
++def build_history(chat, caps=(), vision_model="", errors=None):
+     """Chat history for the model, with attachments folded into the user messages.
+ 
+     Images: if `vision_model` is set, it describes each image first and the chat model only
+-    receives that text. Otherwise images go straight to the chat model if it can see them."""
++    receives that text. Otherwise images go straight to the chat model if it can see them.
++    `errors` maps attachment id -> reason, for images whose description already failed
++    (so a failing vision model is not retried within the same request)."""
++    errors = errors or {}
      out = []
      for m in chat.messages.filter(role__in=["user", "ai"]).prefetch_related("attachments"):
          if m.role == "ai":
-@@ -51,7 +68,12 @@ def build_history(chat, caps=()):
-         content, images = m.content, []
-         for a in m.attachments.all():
+@@ -70,6 +80,7 @@ def build_history(chat, caps=(), vision_model=""):
              if a.kind == "image":
--                if "vision" in caps: images.append(a.image_b64)
-+                if vision_model:
-+                    try:
-+                        content += f"\n\n[Attached image {a.name}, described by a vision model:]\n{_describe(a, vision_model)}"
-+                    except Exception as e:
-+                        content += f"\n\n[Attached image {a.name}: the vision model could not describe it ({ollama.friendly_error(e)})]"
-+                elif "vision" in caps: images.append(a.image_b64)
-                 else: content += f"\n\n[Attached image {a.name}: this model cannot see images]"
-             else:
-                 content += f"\n\n[Attached file: {a.name}]\n```\n{a.text}\n```"
+                 if vision_model:
+                     try:
++                        if a.id in errors: raise RuntimeError(errors[a.id])
+                         content += f"\n\n[Attached image {a.name}, described by a vision model:]\n{_describe(a, vision_model)}"
+                     except Exception as e:
+                         content += f"\n\n[Attached image {a.name}: the vision model could not describe it ({ollama.friendly_error(e)})]"
 diff --git a/pyggie/home/ollama.py b/pyggie/home/ollama.py
-index b9634ee..3468525 100644
+index 3468525..ba8c352 100644
 --- a/pyggie/home/ollama.py
 +++ b/pyggie/home/ollama.py
-@@ -75,6 +75,21 @@ def get_caps(name):
-     return tuple(r.json().get("capabilities", []))
+@@ -81,6 +81,21 @@ VISION_PROMPT = (
+ )
  
  
-+VISION_PROMPT = (
-+    "Describe this image in detail for someone who cannot see it. Transcribe all visible text exactly. "
-+    "Report objects, people, layout, colours, and any numbers, labels or chart values. Do not speculate beyond what is visible."
-+)
++def is_loaded(model):
++    """True if Ollama already holds this model in memory (so the first reply is fast).
++    Any error counts as loaded: we only announce a slow load when we are sure."""
++    try:
++        r = requests.get(f"{OLLAMA_BASE}/api/ps", timeout=3)
++        return (not r.ok) or any(m.get("name") == model or m.get("model") == model
++                                 for m in r.json().get("models", []))
++    except Exception:
++        return True
 +
 +
-+def describe_image(model, image_b64):
-+    """Ask a vision model to describe one image (non-streaming). Returns the description text."""
-+    r = requests.post(f"{OLLAMA_BASE}/api/chat", timeout=300, json={
-+        "model": model, "stream": False, "options": {"temperature": 0.2},
-+        "messages": [{"role": "user", "content": VISION_PROMPT, "images": [image_b64]}]})
-+    _check(r)
-+    return (r.json().get("message", {}).get("content") or "").strip()
++def load_notice(model):
++    return f"Loading {pretty_name(model)} into memory (the first reply is slower)…"
 +
 +
- # capability symbols kept on the flat <option> text (Settings copies that text).
- # The top-bar picker does not draw these; it groups by family / model / size.
- CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images
+ def describe_image(model, image_b64):
+     """Ask a vision model to describe one image (non-streaming). Returns the description text."""
+     r = requests.post(f"{OLLAMA_BASE}/api/chat", timeout=300, json={
+@@ -235,10 +250,13 @@ def chat_stream(model, messages):
+          ("thinking", text)             reasoning tokens
+          ("tool", {"name", "arg"})      a tool is being run
+          ("token", text)                the answer
++         ("status", text)               progress note for the status line (e.g. loading the model)
+     """
+     system = SYSTEM_PROMPT + f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
+     msgs = [{"role": "system", "content": system}] + messages
+     caps = get_caps(model)
++    if not is_loaded(model):
++        yield "status", load_notice(model)
+ 
+     for round_no in range(MAX_ROUNDS):
+         payload = {"model": model, "messages": msgs, "stream": True,
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index 5321c37..8ba0b77 100644
+index 8ba0b77..f01567a 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -1374,6 +1374,12 @@
-         <div class="modal-note">Used when you open Clank.r. Saved in this browser.</div>
-       </div>
+@@ -1786,6 +1786,23 @@
+     // done / error). No elapsed-time guesses about what the model is doing.
+     // `mode` drives the Dyson swarm: orbit = generating, exec = tool running,
+     // wait = approval needed; done/error dissolve it.
++    // what the status line says while a tool runs: say what it is doing, not its internal name
++    function toolStatus(t) {
++      const arg = String(t.arg || '').replace(/\s+/g, ' ').trim();
++      const clip = x => x.length > 60 ? x.slice(0, 57) + '…' : x;
++      let host = arg; try { host = new URL(arg).hostname.replace(/^www\./, ''); } catch (e) { }
++      return ({
++        web_search: () => 'Searching the web: ' + clip(arg),
++        fetch_page: () => 'Reading ' + clip(host),
++        run_python: () => 'Running Python code',
++        run_shell: () => 'Running a shell command',
++        read_file: () => 'Reading ' + clip(arg),
++        write_file: () => 'Writing ' + clip(arg),
++        create_artifact: () => 'Creating an artifact',
++        load_skill: () => 'Loading skill ' + clip(arg),
++        finish: () => 'Wrapping up',
++      }[t.name] || (() => 'Running ' + t.name))();
++    }
+     function makeStatus(body) {
+       const row = body.closest('.message-row');
+       const av = row.querySelector('.msg-avatar'), el = row.querySelector('.status');
+@@ -2353,6 +2370,7 @@
  
-+      <div class="modal-section">
-+        <label class="modal-label" for="visionModel">Image reader (vision model)</label>
-+        <select id="visionModel"></select>
-+        <div class="modal-note">When set, attached images are first described by this model, and your chosen chat model receives that text. Only models marked ◉ are listed. Saved in this browser.</div>
-+      </div>
-+
-       <div class="modal-section">
-         <label class="modal-label" for="hueSlider">Accent colour</label>
-         <div class="swatches" id="swatches">
-@@ -1525,6 +1531,19 @@
-       paintModelPicker();
-     });
- 
-+    // ─── image reader: a vision model that describes images for the chat model ───
-+    const visionSel = document.getElementById('visionModel');
-+    visionSel.innerHTML = '<option value="">None — send images straight to the chat model</option>' +
-+      [...modelSel.options].filter(o => o.text.includes('◉') && o.value)
-+        .map(o => `<option value="${o.value}">${o.text.replace(/\u00a0/g, ' ').trim()}</option>`).join('');
-+    try {
-+      const v = localStorage.getItem('Clank.r.visionModel');
-+      if (v && [...visionSel.options].some(o => o.value === v)) visionSel.value = v;
-+    } catch (e) { }
-+    visionSel.addEventListener('change', () => {
-+      try {localStorage.setItem('Clank.r.visionModel', visionSel.value);} catch (e) { }
-+    });
-+
-     // ─── accent colour ───
-     const hueSlider = document.getElementById('hueSlider');
-     const swatches = document.querySelectorAll('.swatch');
-@@ -1866,7 +1885,7 @@
-       const abort = new AbortController();
-       activeCtx = ctx; activeAbort = abort;
-       const agent = document.getElementById('agentMode').checked;
--      const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
-+      const fields = {content: text, model: modelSel.value, chat_id: currentChatId, vision_model: visionSel.value};
-       let resp;
-       try {
-       if (files.length) {
+           const data = JSON.parse(payload);
+           if (data.error) {ctx.errored = true; ctx.setStatus('error', 'Error: ' + data.error);}
++          if (data.status && !ctx.errored) ctx.setStatus('working', data.status, 'orbit');   // progress note from the server
+           if (data.step) {ctx.step = data.step; ctx.setStatus('working', `Step ${data.step} · waiting for model`, 'orbit');}
+           if (data.chat_id) {
+             if (!ctx.step) ctx.setStatus('working', 'Waiting for model', 'orbit');
+@@ -2376,7 +2394,7 @@
+             ctx.liveTool.querySelector('.tn-code code').textContent += data.tool_arg.delta;
+           }
+           if (data.tool) {
+-            if (!ctx.errored) ctx.setStatus('working', 'Running ' + data.tool.name, 'exec');
++            if (!ctx.errored) ctx.setStatus('working', toolStatus(data.tool), 'exec');
+             if (ctx.liveTool && ctx.liveTool.dataset.name === data.tool.name) {
+               ctx.liveTool.querySelector('.tn-code code').textContent = String(data.tool.arg || '');
+             } else {
+@@ -2385,7 +2403,7 @@
+             }
+           }
+           if (data.result) {
+-            if (!ctx.errored) ctx.setStatus('working', 'Continuing', 'orbit');
++            if (!ctx.errored) ctx.setStatus('working', 'Reading the result', 'orbit');
+             if (ctx.liveTool) {
+               noticeStatus(ctx.liveTool, 'done');
+               ctx.liveTool.querySelector('.tn-out').textContent = data.result.out;
 diff --git a/pyggie/home/views.py b/pyggie/home/views.py
-index 9849727..28c278a 100644
+index 28c278a..b2fb65f 100644
 --- a/pyggie/home/views.py
 +++ b/pyggie/home/views.py
-@@ -57,7 +57,7 @@ def send_message(request):
+@@ -27,6 +27,31 @@ def _parse(request):
+     return json.loads(request.body), []
+ 
+ 
++def _prepare_history(chat, model, vision_model):
++    """Generator: yields ('status', text) while a vision model describes new images, then
++    returns the chat history (use `history = yield from _prepare_history(...)`)."""
++    todo = files.images_to_describe(chat, vision_model) if vision_model else []
++    errors = {}
++    for i, a in enumerate(todo, 1):
++        which = f" {i}/{len(todo)}" if len(todo) > 1 else ""
++        yield 'status', f"Describing image{which} with {ollama.pretty_name(vision_model)}…"
++        try:
++            files._describe(a, vision_model)
++        except Exception as e:
++            errors[a.id] = ollama.friendly_error(e)       # build_history puts this in the prompt
++    return files.build_history(chat, ollama.get_caps(model), vision_model, errors)
++
++
++def _as_sse(gen):
++    """Forward (kind, value) events from `gen` as SSE lines; returns gen's return value."""
++    while True:
++        try:
++            kind, value = next(gen)
++        except StopIteration as e:
++            return e.value
++        yield f"data: {json.dumps({kind: value})}\n\n"
++
++
+ @login_required
+ def index(request):
+     chats  = Chat.objects.filter(user=request.user).order_by('-created_at')
+@@ -57,7 +82,7 @@ def send_message(request):
  
      msg = Message.objects.create(chat=chat, role='user', content=content)
      upload_errors = files.save_attachments(msg, uploads)
--    history = files.build_history(chat, ollama.get_caps(model))
-+    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
+-    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
++    vision_model = data.get('vision_model', '').strip()
      cache.delete(_stop_key(chat.id))
  
      full_reply = []
-@@ -130,7 +130,7 @@ def agent_send(request):
+@@ -68,7 +93,13 @@ def send_message(request):
+         if upload_errors:
+             yield f"data: {json.dumps({'token': '> △ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
+ 
+-        # kind is 'token', 'thinking' or 'tool'; only the answer is saved.
++        try:
++            history = yield from _as_sse(_prepare_history(chat, model, vision_model))
++        except Exception as e:
++            yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
++            yield "data: [DONE]\n\n"
++            return
++        # kind is 'token', 'thinking', 'tool' or 'status'; only the answer is saved.
+         # finally: whatever was written is saved, even when stopped or disconnected
+         replies = ollama.chat_stream(model=model, messages=history)
+         try:
+@@ -130,11 +161,12 @@ def agent_send(request):
      upload_errors = files.save_attachments(msg, uploads)
      cache.delete(_stop_key(chat.id))
      agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
--    history = files.build_history(chat, ollama.get_caps(model))
-+    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
-     run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
+-    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
+-    run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
++    vision_model = data.get('vision_model', '').strip()
++    run = AgentRun.objects.create(chat=chat, model=model, msgs=[])
      def gen():
          if upload_errors:
+             yield 'token', '> △ ' + '; '.join(upload_errors) + '\n\n'
++        run.msgs = yield from _prepare_history(chat, model, vision_model)   # may yield 'status' events
+         yield from agent.drive(run, model)
+     return _agent_stream(run, chat, gen())
+ 
 -- 
 2.43.0

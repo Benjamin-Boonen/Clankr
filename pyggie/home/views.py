@@ -27,6 +27,31 @@ def _parse(request):
     return json.loads(request.body), []
 
 
+def _prepare_history(chat, model, vision_model):
+    """Generator: yields ('status', text) while a vision model describes new images, then
+    returns the chat history (use `history = yield from _prepare_history(...)`)."""
+    todo = files.images_to_describe(chat, vision_model) if vision_model else []
+    errors = {}
+    for i, a in enumerate(todo, 1):
+        which = f" {i}/{len(todo)}" if len(todo) > 1 else ""
+        yield 'status', f"Describing image{which} with {ollama.pretty_name(vision_model)}…"
+        try:
+            files._describe(a, vision_model)
+        except Exception as e:
+            errors[a.id] = ollama.friendly_error(e)       # build_history puts this in the prompt
+    return files.build_history(chat, ollama.get_caps(model), vision_model, errors)
+
+
+def _as_sse(gen):
+    """Forward (kind, value) events from `gen` as SSE lines; returns gen's return value."""
+    while True:
+        try:
+            kind, value = next(gen)
+        except StopIteration as e:
+            return e.value
+        yield f"data: {json.dumps({kind: value})}\n\n"
+
+
 @login_required
 def index(request):
     chats  = Chat.objects.filter(user=request.user).order_by('-created_at')
@@ -57,7 +82,7 @@ def send_message(request):
 
     msg = Message.objects.create(chat=chat, role='user', content=content)
     upload_errors = files.save_attachments(msg, uploads)
-    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
+    vision_model = data.get('vision_model', '').strip()
     cache.delete(_stop_key(chat.id))
 
     full_reply = []
@@ -68,7 +93,13 @@ def send_message(request):
         if upload_errors:
             yield f"data: {json.dumps({'token': '> △ ' + '; '.join(upload_errors) + chr(10) + chr(10)})}\n\n"
 
-        # kind is 'token', 'thinking' or 'tool'; only the answer is saved.
+        try:
+            history = yield from _as_sse(_prepare_history(chat, model, vision_model))
+        except Exception as e:
+            yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        # kind is 'token', 'thinking', 'tool' or 'status'; only the answer is saved.
         # finally: whatever was written is saved, even when stopped or disconnected
         replies = ollama.chat_stream(model=model, messages=history)
         try:
@@ -130,11 +161,12 @@ def agent_send(request):
     upload_errors = files.save_attachments(msg, uploads)
     cache.delete(_stop_key(chat.id))
     agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
-    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
-    run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
+    vision_model = data.get('vision_model', '').strip()
+    run = AgentRun.objects.create(chat=chat, model=model, msgs=[])
     def gen():
         if upload_errors:
             yield 'token', '> △ ' + '; '.join(upload_errors) + '\n\n'
+        run.msgs = yield from _prepare_history(chat, model, vision_model)   # may yield 'status' events
         yield from agent.drive(run, model)
     return _agent_stream(run, chat, gen())
 

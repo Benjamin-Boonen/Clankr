@@ -1786,6 +1786,23 @@
     // done / error). No elapsed-time guesses about what the model is doing.
     // `mode` drives the Dyson swarm: orbit = generating, exec = tool running,
     // wait = approval needed; done/error dissolve it.
+    // what the status line says while a tool runs: say what it is doing, not its internal name
+    function toolStatus(t) {
+      const arg = String(t.arg || '').replace(/\s+/g, ' ').trim();
+      const clip = x => x.length > 60 ? x.slice(0, 57) + '…' : x;
+      let host = arg; try { host = new URL(arg).hostname.replace(/^www\./, ''); } catch (e) { }
+      return ({
+        web_search: () => 'Searching the web: ' + clip(arg),
+        fetch_page: () => 'Reading ' + clip(host),
+        run_python: () => 'Running Python code',
+        run_shell: () => 'Running a shell command',
+        read_file: () => 'Reading ' + clip(arg),
+        write_file: () => 'Writing ' + clip(arg),
+        create_artifact: () => 'Creating an artifact',
+        load_skill: () => 'Loading skill ' + clip(arg),
+        finish: () => 'Wrapping up',
+      }[t.name] || (() => 'Running ' + t.name))();
+    }
     function makeStatus(body) {
       const row = body.closest('.message-row');
       const av = row.querySelector('.msg-avatar'), el = row.querySelector('.status');
@@ -2353,6 +2370,7 @@
 
           const data = JSON.parse(payload);
           if (data.error) {ctx.errored = true; ctx.setStatus('error', 'Error: ' + data.error);}
+          if (data.status && !ctx.errored) ctx.setStatus('working', data.status, 'orbit');   // progress note from the server
           if (data.step) {ctx.step = data.step; ctx.setStatus('working', `Step ${data.step} · waiting for model`, 'orbit');}
           if (data.chat_id) {
             if (!ctx.step) ctx.setStatus('working', 'Waiting for model', 'orbit');
@@ -2376,7 +2394,7 @@
             ctx.liveTool.querySelector('.tn-code code').textContent += data.tool_arg.delta;
           }
           if (data.tool) {
-            if (!ctx.errored) ctx.setStatus('working', 'Running ' + data.tool.name, 'exec');
+            if (!ctx.errored) ctx.setStatus('working', toolStatus(data.tool), 'exec');
             if (ctx.liveTool && ctx.liveTool.dataset.name === data.tool.name) {
               ctx.liveTool.querySelector('.tn-code code').textContent = String(data.tool.arg || '');
             } else {
@@ -2385,7 +2403,7 @@
             }
           }
           if (data.result) {
-            if (!ctx.errored) ctx.setStatus('working', 'Continuing', 'orbit');
+            if (!ctx.errored) ctx.setStatus('working', 'Reading the result', 'orbit');
             if (ctx.liveTool) {
               noticeStatus(ctx.liveTool, 'done');
               ctx.liveTool.querySelector('.tn-out').textContent = data.result.out;

@@ -81,6 +81,21 @@ VISION_PROMPT = (
 )
 
 
+def is_loaded(model):
+    """True if Ollama already holds this model in memory (so the first reply is fast).
+    Any error counts as loaded: we only announce a slow load when we are sure."""
+    try:
+        r = requests.get(f"{OLLAMA_BASE}/api/ps", timeout=3)
+        return (not r.ok) or any(m.get("name") == model or m.get("model") == model
+                                 for m in r.json().get("models", []))
+    except Exception:
+        return True
+
+
+def load_notice(model):
+    return f"Loading {pretty_name(model)} into memory (the first reply is slower)…"
+
+
 def describe_image(model, image_b64):
     """Ask a vision model to describe one image (non-streaming). Returns the description text."""
     r = requests.post(f"{OLLAMA_BASE}/api/chat", timeout=300, json={
@@ -235,10 +250,13 @@ def chat_stream(model, messages):
          ("thinking", text)             reasoning tokens
          ("tool", {"name", "arg"})      a tool is being run
          ("token", text)                the answer
+         ("status", text)               progress note for the status line (e.g. loading the model)
     """
     system = SYSTEM_PROMPT + f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
     msgs = [{"role": "system", "content": system}] + messages
     caps = get_caps(model)
+    if not is_loaded(model):
+        yield "status", load_notice(model)
 
     for round_no in range(MAX_ROUNDS):
         payload = {"model": model, "messages": msgs, "stream": True,
