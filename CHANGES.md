@@ -1,5 +1,8 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Attach-icon fix (Claude, 2026-10-28)**: `.attach-btn` set no `color`, so its `currentColor` icon fell back to the
+> browser's black button text. It now uses `var(--muted)` (hover `var(--accent)`) and is larger (font-size 1.1rem → 1.6rem).
+
 > **Icon fix (Claude, 2026-10-28)** — `home/templates/home/index.html`, `home/static/icons/`.
 > SVG Repo icons shipped with hardcoded `fill/stroke="#000"` and `width/height="800px"`, so they were black
 > and mis-sized. 1. `cleanIcon()` (run in `loadIcons`) strips the XML prolog/comments/title, the fixed

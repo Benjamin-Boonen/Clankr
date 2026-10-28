@@ -1,98 +1,45 @@
-From 879c4bdb40af873279f4fd3a44b59c016efb35eb Mon Sep 17 00:00:00 2001
+From 6605679fb9068dea55fc811d6e49000c7563dee8 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Wed, 28 Oct 2026 11:54:39 +0100
-Subject: [PATCH 2/2] Fix icon colour and scaling (SVG Repo icons rendered
- black/mis-sized)
+Date: Wed, 28 Oct 2026 11:58:46 +0100
+Subject: [PATCH] Fix attach button icon: theme colour and larger size
 
-- index.html: cleanIcon() strips fixed width/height, prolog, comments; unfilled shapes inherit currentColor
-- index.html: CSS forces currentColor over hardcoded fill/stroke in .icon svg
-- icons: rename artifact_*.svg -> artifact-*.svg to match the keys the code requests
-- CHANGES.md: document
+.attach-btn had no color, so currentColor resolved to black. Use --muted / --accent on hover, font-size 1.6rem.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01PYWF5DEBkW3yKS3tvDRXHL
 ---
- CHANGES.md                                    |  8 ++++++++
- .../{artifact_html.svg => artifact-html.svg}  |  0
- ...act_markdown.svg => artifact-markdown.svg} |  0
- .../{artifact_svg.svg => artifact-svg.svg}    |  0
- pyggie/home/templates/home/index.html         | 20 +++++++++++++++++--
- 5 files changed, 26 insertions(+), 2 deletions(-)
- rename pyggie/home/static/icons/{artifact_html.svg => artifact-html.svg} (100%)
- rename pyggie/home/static/icons/{artifact_markdown.svg => artifact-markdown.svg} (100%)
- rename pyggie/home/static/icons/{artifact_svg.svg => artifact-svg.svg} (100%)
+ CHANGES.md                            | 3 +++
+ pyggie/home/templates/home/index.html | 5 +++--
+ 2 files changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/CHANGES.md b/CHANGES.md
-index b052bcc..b1f9658 100644
+index b1f9658..ff496d4 100644
 --- a/CHANGES.md
 +++ b/CHANGES.md
-@@ -1,5 +1,13 @@
+@@ -1,5 +1,8 @@
  # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
  
-+> **Icon fix (Claude, 2026-10-28)** — `home/templates/home/index.html`, `home/static/icons/`.
-+> SVG Repo icons shipped with hardcoded `fill/stroke="#000"` and `width/height="800px"`, so they were black
-+> and mis-sized. 1. `cleanIcon()` (run in `loadIcons`) strips the XML prolog/comments/title, the fixed
-+> width/height, and makes unfilled shapes inherit `currentColor`. 2. CSS `.icon svg …[fill]/[stroke]` forces
-+> `currentColor` over any hardcoded colour (works for future icons too). 3. Renamed `artifact_*.svg` →
-+> `artifact-*.svg`: the code asks for `artifact-html` etc. (as the README.txt says), so they never loaded.
-+> Checked by rendering every icon in headless Chromium.
++> **Attach-icon fix (Claude, 2026-10-28)**: `.attach-btn` set no `color`, so its `currentColor` icon fell back to the
++> browser's black button text. It now uses `var(--muted)` (hover `var(--accent)`) and is larger (font-size 1.1rem → 1.6rem).
 +
- > **Agent-loop fix (Claude, 2026-10-28)** — `pyggie/home/agent.py` only.
- > Problem: agent mode could loop forever re-running the same `web_search` (seen when the
- > user's question had a false premise, so nothing could satisfy the model).
-diff --git a/pyggie/home/static/icons/artifact_html.svg b/pyggie/home/static/icons/artifact-html.svg
-similarity index 100%
-rename from pyggie/home/static/icons/artifact_html.svg
-rename to pyggie/home/static/icons/artifact-html.svg
-diff --git a/pyggie/home/static/icons/artifact_markdown.svg b/pyggie/home/static/icons/artifact-markdown.svg
-similarity index 100%
-rename from pyggie/home/static/icons/artifact_markdown.svg
-rename to pyggie/home/static/icons/artifact-markdown.svg
-diff --git a/pyggie/home/static/icons/artifact_svg.svg b/pyggie/home/static/icons/artifact-svg.svg
-similarity index 100%
-rename from pyggie/home/static/icons/artifact_svg.svg
-rename to pyggie/home/static/icons/artifact-svg.svg
+ > **Icon fix (Claude, 2026-10-28)** — `home/templates/home/index.html`, `home/static/icons/`.
+ > SVG Repo icons shipped with hardcoded `fill/stroke="#000"` and `width/height="800px"`, so they were black
+ > and mis-sized. 1. `cleanIcon()` (run in `loadIcons`) strips the XML prolog/comments/title, the fixed
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index 2037ce7..46adcf5 100644
+index 46adcf5..5321c37 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -1043,7 +1043,10 @@
-     /* ─── icons: SVG files from home/static/icons/, or a text fallback ─── */
-     .icon {display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
-            width: 1em; height: 1em; margin-right: 0.4em; vertical-align: -0.15em; line-height: 1}
--    .icon svg {width: 100%; height: 100%; display: block}
-+    .icon svg {width: 100%; height: 100%; display: block; overflow: visible}
-+    /* theme colour wins over any hardcoded black (#000, #222…) in downloaded icon files */
-+    .icon svg[fill]:not([fill="none"]), .icon svg [fill]:not([fill="none"]) {fill: currentColor}
-+    .icon svg[stroke]:not([stroke="none"]), .icon svg [stroke]:not([stroke="none"]) {stroke: currentColor}
-     .attach-btn .icon {margin: 0}
- 
-     /* ─── tool notices (collapsible) ─── */
-@@ -1995,11 +1998,24 @@
-     function fillIcons() {
-       document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = iconHtml(el.dataset.icon); });
+@@ -544,8 +544,9 @@
+       margin-bottom: 0;
      }
-+    // Make a downloaded SVG (e.g. from SVG Repo) behave like a theme icon: drop the XML
-+    // prolog/comments/scripts, drop the fixed width/height (CSS sizes it; viewBox scales it),
-+    // and let unfilled shapes inherit currentColor instead of defaulting to black.
-+    function cleanIcon(txt) {
-+      txt = txt.replace(/<\?xml[\s\S]*?\?>/gi, '').replace(/<!--[\s\S]*?-->/g, '')
-+               .replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<(title|desc)>[\s\S]*?<\/\1>/gi, '').trim();
-+      return txt.replace(/<svg\b[^>]*>/i, tag => {
-+        tag = tag.replace(/\s(width|height)="[^"]*"/gi, '');
-+        if (!/\sfill=/i.test(tag)) tag = tag.replace(/<svg\b/i, '<svg fill="currentColor"');
-+        if (!/\sviewBox=/i.test(tag)) tag = tag.replace(/<svg\b/i, '<svg viewBox="0 0 24 24"');
-+        return tag;
-+      });
-+    }
-     async function loadIcons() {
-       await Promise.all(Object.keys(ICON_FALLBACK).map(async name => {
-         try {
-           const r = await fetch(ICON_BASE + name + '.svg');
--          if (r.ok) iconSvg[name] = (await r.text()).trim().replace(/<script[\s\S]*?<\/script>/gi, '');
-+          if (r.ok) iconSvg[name] = cleanIcon(await r.text());
-         } catch (e) { /* keep the fallback */ }
-       }));
-       fillIcons();
+ 
+-    .attach-btn {background:none;border:none;cursor:pointer;font-size:1.1rem;opacity:.7;padding:0 .4rem}
+-    .attach-btn:hover {opacity:1}
++    .attach-btn {background:none;border:none;cursor:pointer;font-size:1.6rem;color:var(--muted);padding:0 .4rem;
++                 display:inline-flex;align-items:center;transition:color .15s}
++    .attach-btn:hover {color:var(--accent)}
+     .file-chips {display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.4rem}
+     .file-chips span {font-size:.75rem;border:1px solid rgba(128,128,128,.5);border-radius:999px;padding:.1rem .6rem;cursor:pointer}
+     .file-chips span:hover {text-decoration:line-through}
 -- 
 2.43.0
