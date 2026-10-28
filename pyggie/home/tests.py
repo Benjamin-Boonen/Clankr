@@ -6,8 +6,8 @@ from .agent import _compact_messages, _is_repeat
 class AgentContinuityTests(SimpleTestCase):
     def test_compaction_preserves_recent_messages_and_roles(self):
         messages = [
-            {"role": "user", "content": "Original task " + ("x" * 5000)},
-            {"role": "tool", "tool_name": "web_search", "content": "Evidence " + ("y" * 5000)},
+            {"role": "user", "content": "Original task " + ("x" * 20000)},
+            {"role": "tool", "tool_name": "web_search", "content": "Evidence " + ("y" * 20000)},
         ] + [{"role": "user", "content": f"recent-{i}"} for i in range(10)]
 
         compacted = _compact_messages(messages)
