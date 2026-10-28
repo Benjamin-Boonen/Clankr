@@ -239,20 +239,19 @@ def _process(run, calls):
             return
         calls.pop(0)
         label = next(iter(args.values()), "") if args else ""
-        yield "tool", {"name": name, "arg": label}
         if _is_repeat(run, name, args):
-            out = ("You already ran this exact call and have its result above. Do NOT repeat it. "
-                   "Answer now with what you have, or say the information isn't available, then call finish.")
+            out = ("This exact read-only call already ran and its result is in the transcript. "
+                   "Do not repeat it; answer from the evidence already collected.")
         elif _research_limit_reached(run, name):
             prior = sum(1 for message in run.msgs
                         if message.get("role") == "tool" and message.get("tool_name") == name)
             run.research_exhausted = True
             out = (f"Research limit reached: {name} has already been used {prior} times. "
-                   "Further research is disabled for this run. Answer from the evidence already "
-                   "collected, or ask one brief clarifying question if the request is ambiguous.")
-        elif name in {"web_search", "fetch_page"}:
-            out = execute(name, args, run)
+                   "This call was NOT executed. Further research is disabled for this run. "
+                   "Answer from the evidence already collected, or ask one brief clarifying question.")
         else:
+            # Emit "tool" only for a real execution, never for a blocked/repeated call.
+            yield "tool", {"name": name, "arg": label}
             out = execute(name, args, run)
         run.msgs.append({"role": "tool", "tool_name": name, "content": out})
         yield "result", {"name": name, "out": out[:1500]}
