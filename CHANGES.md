@@ -1,5 +1,17 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Capability chips (Claude, 2026-10-28)**: the top bar now shows what the selected model can do.
+> - `ollama.get_models()` returns `caps` (subset of `vision`, `tools`, `thinking`); each `<option>` gets `data-caps="vision,tools"`.
+> - Top bar: three labelled chips (`#modelCaps`) after the Size picker. Lit accent pill = the model can, dashed
+>   struck-through = it can't. Hover for a plain-language tooltip. Labels hide below 760px (icons only).
+> - Model and Size menus: capability icons at the end of each row, to compare before switching.
+> - New icons `static/icons/cap-vision.svg`, `cap-tools.svg`, `cap-thinking.svg` (24x24, currentColor; inline fallbacks
+>   in `ICON_FALLBACK`, so swapping the files restyles them).
+> - JS: `CAPS`, `paintCaps()`, `rowCaps()`, `capsOf()` inside `initModelPicker()`. Model-menu rows show the caps of the
+>   size that would be picked. Not done: Agent-toggle warning when the model has no tools.
+> Tested with a mock Ollama + Chromium (chips for 3 models, menu rows, no JS errors).
+
+
 > **Status updates (Claude, 2026-10-28)** — new generic SSE event `{"status": "<text>"}`: the frontend shows it on the
 > status line (handled next to `data.step` in the stream reader).
 > - Server emits it for: `Describing image [i/n] with <vision model>…` (vision relay), and

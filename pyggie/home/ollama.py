@@ -170,7 +170,7 @@ def pretty_name(name):
 
 
 def get_models():
-    """[{name, label, tag, family, family_key, model, size}, ...]
+    """[{name, label, tag, caps, family, family_key, model, size}, ...]
 
     name is the raw Ollama id sent to /send/ and /agent/send/. Do not rename it.
     label + tag are the flat option text. Settings (#defaultModel) copies
@@ -183,11 +183,13 @@ def get_models():
     for m in resp.json()['models']:
         caps = get_caps(m['name'])
         tag = " ".join(sym for cap, sym in CAP_SYMBOLS if cap in caps)
+        has = [cap for cap, _ in CAP_SYMBOLS if cap in caps]      # ['thinking', 'tools', 'vision'] subset
         parts = split_ollama_name(m['name'])
         out.append({
             "name": m["name"],
             "label": f"{parts['family']} · {parts['model']} · {parts['size']}",
             "tag": tag,
+            "caps": has,
             **parts,
         })
     return out
