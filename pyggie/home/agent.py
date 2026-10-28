@@ -233,6 +233,18 @@ def _process(run, calls):
         if _is_repeat(run, name, args):
             out = ("You already ran this exact call and have its result above. Do NOT repeat it. "
                    "Answer now with what you have, or say the information isn't available, then call finish.")
+        elif name in {"web_search", "fetch_page"}:
+            # Semantic loop guard: small local models often paraphrase the same search.
+            # Cap research actions per run even when arguments differ slightly.
+            limit = 2 if name == "web_search" else 2
+            prior = sum(1 for message in run.msgs
+                        if message.get("role") == "tool" and message.get("tool_name") == name)
+            if prior >= limit:
+                out = (f"Research limit reached: {name} has already been used {prior} times. "
+                       "Do not search again. Answer from the evidence already collected, or ask one "
+                       "brief clarifying question if the user's request is genuinely ambiguous.")
+            else:
+                out = execute(name, args, run)
         else:
             out = execute(name, args, run)
         run.msgs.append({"role": "tool", "tool_name": name, "content": out})
@@ -270,9 +282,26 @@ def drive(run, model):
         text, calls = run.last
         run.msgs.append({"role": "assistant", "content": text, **({"tool_calls": calls} if calls else {})})
         if not calls:
-            run.done = True
             if not text.strip():
-                yield "token", "*(The model finished its work but wrote no final answer — see the tool activity above.)*"
+                # Some local reasoning models emit only hidden thinking, then stop.
+                # Give them one tool-free chance to answer or ask for clarification.
+                run.msgs.append({"role": "user", "content":
+                    "Your previous turn produced no user-facing answer. Do not call tools. "
+                    "Respond to the original user request directly using the conversation and tool results. "
+                    "If the request is ambiguous, ask one concise clarifying question. "
+                    "Do not narrate your reasoning or your plan."})
+                try:
+                    yield from _model_round(model, run, allow_tools=False)
+                    recovery, _ = run.last
+                except Exception as exc:
+                    yield "error", ollama.friendly_error(exc)
+                    recovery = ""
+                run.msgs.append({"role": "assistant", "content": recovery})
+                if not recovery.strip():
+                    yield "token", ("I couldn't produce a complete answer from this run. "
+                                    "The tool results above are preserved. Please clarify what you mean "
+                                    "or retry with a model that reliably produces final answers.")
+            run.done = True
             break
         yield from _process(run, calls)
         if run.pending: run.save(); return        # paused
