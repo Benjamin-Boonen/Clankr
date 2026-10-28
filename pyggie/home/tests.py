@@ -1,6 +1,6 @@
 from django.test import SimpleTestCase
 
-from .agent import _compact_messages, _is_repeat
+from .agent import _compact_messages, _is_repeat, _research_limit_reached
 
 
 class AgentContinuityTests(SimpleTestCase):
@@ -33,3 +33,14 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertTrue(_is_repeat(Run(), "web_search", {"query": "RC circuit"}))
         self.assertFalse(_is_repeat(Run(), "web_search", {"query": "different query"}))
         self.assertFalse(_is_repeat(Run(), "run_python", {"code": "print(1)"}))
+
+    def test_research_limit_stops_semantically_different_searches(self):
+        class Run:
+            msgs = [
+                {"role": "tool", "tool_name": "web_search", "content": "no useful results"},
+                {"role": "tool", "tool_name": "web_search", "content": "same idea, rephrased"},
+            ]
+
+        self.assertTrue(_research_limit_reached(Run(), "web_search"))
+        self.assertFalse(_research_limit_reached(Run(), "fetch_page"))
+        self.assertFalse(_research_limit_reached(Run(), "run_python"))
