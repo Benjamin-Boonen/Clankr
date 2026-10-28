@@ -9,8 +9,10 @@ from . import ollama
 from .models import Artifact
 
 MAX_STEPS = 15            # hard cap on model calls per run
-REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill"}   # idempotent: repeating adds nothing
-OUT_CHARS = 8000          # tool output the model gets to see
+REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill"}
+OUT_CHARS = 6000
+CONTEXT_CHARS = 36000
+RECENT_MESSAGES = 10
 SKILL_DIR = Path(__file__).parent / "skills"
 HAS_BWRAP = shutil.which("bwrap") is not None
 
@@ -34,31 +36,53 @@ TOOLS = [
 ]
 
 AGENT_PROMPT = (
-    "\nYou are in AGENT MODE. Work autonomously on the user's task: plan briefly, call tools, "
-    "inspect results, fix mistakes, repeat. Gather facts and sources with web_search and fetch_page first, "
-    "before writing anything, even when you think you know the answer. Prefer run_python for computation. Use create_artifact only when the "
-    "user asked for a deliverable they will keep (a page, document, diagram) (load_skill first for html/report/diagram). "
-    "Answer questions and explanations in text; never create an artifact or file just to illustrate an answer. "
-    "User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
-    "if denied, adapt. run_python has NO network access — never try web or API calls in code; use web_search/fetch_page instead. "
-    "When completely done, call finish(summary) with what you did and what the results are. "
-    "Never write tool calls as text. "
-    "Never repeat a tool call with the same arguments: you already have its result. If the results do not "
-    "contain what the user asked for (or the premise seems false), say so and call finish — do not keep searching."
+    "\nYou are in AGENT MODE. Preserve the user's original objective across every tool call. "
+    "Use tools only when they materially help; do not search by default for maths, reasoning, or content already "
+    "provided by the user. Before each tool call, consider what is already known and what specific missing fact "
+    "the call will supply. After a result, incorporate it into the existing solution instead of restarting. "
+    "Do not repeat an identical tool call. If a result is unavailable, contradictory, or enough to answer, stop "
+    "research and finish with the evidence you have; never search in a loop. Prefer run_python for computation. "
+    "Use create_artifact only for a deliverable the user asked to keep (load the matching skill first); otherwise "
+    "answer in text. User attachments are in the workspace. run_python has NO network access; use web_search or "
+    "fetch_page for network research. Some tools require approval; if denied, adapt without retrying that action. "
+    "When done, call finish(summary) with a concise, truthful report. Never write tool calls as text."
 )
 
 def _is_repeat(run, name, args):
-    """True if an idempotent tool was already called with identical args earlier in this run.
-    (The current call is already in run.msgs, so one earlier match means a repeat.)"""
-    if name not in REPEAT_SAFE: return False
+    """Detect a repeated idempotent call; the current call is already in run.msgs."""
+    if name not in REPEAT_SAFE:
+        return False
     key = json.dumps(args, sort_keys=True)
-    n = 0
-    for m in run.msgs:
-        for c in m.get("tool_calls") or []:
-            f = c["function"]
-            if f["name"] == name and json.dumps(ollama.parse_args(f.get("arguments")), sort_keys=True) == key:
-                n += 1
-    return n > 1
+    count = 0
+    for message in run.msgs:
+        for call in message.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            if (fn.get("name") == name and
+                    json.dumps(ollama.parse_args(fn.get("arguments")), sort_keys=True) == key):
+                count += 1
+    return count > 1
+
+
+def _compact_messages(messages):
+    """Clip older transcript prose/results while preserving message and tool ordering."""
+    total = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
+    if total <= CONTEXT_CHARS:
+        return messages
+    cutoff = max(0, len(messages) - RECENT_MESSAGES)
+    compacted = []
+    for index, message in enumerate(messages):
+        if index >= cutoff:
+            compacted.append(message)
+            continue
+        item = dict(message)
+        content = item.get("content")
+        if isinstance(content, str):
+            limit = 900 if item.get("role") == "tool" else 1800
+            if len(content) > limit:
+                item["content"] = content[:limit] + "\n…[older context compacted]"
+        compacted.append(item)
+    return compacted
+
 
 # Preamble for run_python when no OS sandbox (bwrap) is available: Python-level
 # network block. Best-effort (ctypes/raw sockets can bypass it) — which is why
@@ -167,24 +191,29 @@ def _model_round(model, run, allow_tools=True):
         yield "status", ollama.load_notice(model)
     system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
              f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
-    payload = {"model": model, "stream": True, "options": {"temperature": 0.2},
-               "messages": [{"role": "system", "content": system}] + run.msgs}
+    payload = {"model": model, "stream": True,
+               "options": {"temperature": 0.2, "num_predict": 2048},
+               "messages": [{"role": "system", "content": system}] + _compact_messages(run.msgs)}
     if "thinking" in caps: payload["think"] = True
     if allow_tools and "tools" in caps: payload["tools"] = TOOLS
-    resp = requests.post(f"{ollama.OLLAMA_BASE}/api/chat", json=payload, stream=True)
-    ollama._check(resp)
-    text, calls = [], []
-    for line in resp.iter_lines():
-        if not line: continue
-        c = json.loads(line); m = c.get("message", {})
-        if t := m.get("thinking"): yield "thinking", t
-        if t := m.get("content"): text.append(t); yield "token", t
-        for name, frag in ollama.merge_tool_calls(calls, m.get("tool_calls")):
-            yield "tool_arg", {"name": name or "", "delta": frag}   # live, while typed
-        if c.get("done"): break
-    for call in calls:
-        call["function"]["arguments"] = ollama.parse_args(call["function"].get("arguments"))
-    run.last = ("".join(text), calls)
+    resp = requests.post(f"{ollama.OLLAMA_BASE}/api/chat", json=payload,
+                         stream=True, timeout=(15, 180))
+    try:
+        ollama._check(resp)
+        text, calls = [], []
+        for line in resp.iter_lines():
+            if not line: continue
+            c = json.loads(line); m = c.get("message", {})
+            if t := m.get("thinking"): yield "thinking", t
+            if t := m.get("content"): text.append(t); yield "token", t
+            for name, frag in ollama.merge_tool_calls(calls, m.get("tool_calls")):
+                yield "tool_arg", {"name": name or "", "delta": frag}
+            if c.get("done"): break
+        for call in calls:
+            call["function"]["arguments"] = ollama.parse_args(call["function"].get("arguments"))
+        run.last = ("".join(text), calls)
+    finally:
+        resp.close()    run.last = ("".join(text), calls)
 
 def _process(run, calls):
     """Run calls in order. If one needs approval, park the rest in run.pending and stop."""
@@ -209,31 +238,44 @@ def _process(run, calls):
         run.msgs.append({"role": "tool", "tool_name": name, "content": out})
         yield "result", {"name": name, "out": out[:1500]}
         if name == "finish" and run.summary:
-            # the finish() summary IS the agent's report to the user — show it as text
             yield "token", f"\n\n**Done:** {run.summary}"
         for a in run.new_artifacts: yield "artifact", a
         run.new_artifacts = []
+        if name == "finish":
+            calls.clear()
+            break
     run.pending = []
 
 def drive(run, model):
     """Main loop. Yields events until finished, paused for approval, or out of steps."""
-    run.new_artifacts = []; run.done = False
-    if run.pending:                       # resumed with leftover calls
+    run.new_artifacts = []
+    # resume() may already have executed finish(); never reset its terminal state.
+    if run.done:
+        run.pending = []
+    elif run.pending:
         calls = run.pending; run.pending = []
         yield from _process(run, calls)
         if run.pending: run.save(); return
     while not run.done and run.steps < MAX_STEPS:
         run.steps += 1
         yield "step", run.steps
-        yield from _model_round(model, run)
+        try:
+            yield from _model_round(model, run)
+        except Exception as exc:
+            yield "error", ollama.friendly_error(exc)
+            yield "token", ("\n\nI couldn't complete the remaining steps because the model request failed. "
+                            "Completed tool results above are preserved; I stopped rather than retrying in a loop.")
+            run.done = True
+            break
         text, calls = run.last
         run.msgs.append({"role": "assistant", "content": text, **({"tool_calls": calls} if calls else {})})
         if not calls:
             run.done = True
             if not text.strip():
                 yield "token", "*(The model finished its work but wrote no final answer — see the tool activity above.)*"
-            break                                  # plain answer = done
+            break
         yield from _process(run, calls)
+        if run.pending: run.save(); return        yield from _process(run, calls)
         if run.pending: run.save(); return        # paused
     if not run.done:
         # Step limit reached: force ONE final round without tools so the user
@@ -243,8 +285,13 @@ def drive(run, model):
         run.msgs.append({"role": "user", "content":
             "You have reached the step limit. WITHOUT calling any tools, tell the user in 2-4 sentences: "
             "what you completed, what is still missing, and where the results are (files or artifacts)."})
-        yield from _model_round(model, run, allow_tools=False)
-        text, _ = run.last
+        try:
+            yield from _model_round(model, run, allow_tools=False)
+            text, _ = run.last
+        except Exception as exc:
+            yield "error", ollama.friendly_error(exc)
+            text = ("I reached the agent step limit and the final summary request failed. "
+                    "Completed tool results above are preserved, but the task may be incomplete.")
         run.msgs.append({"role": "assistant", "content": text})
         if not text.strip():
             yield "token", "\n\n*(Stopped: step limit reached before the task finished. See the tool activity above for partial results.)*"
