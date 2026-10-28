@@ -63,6 +63,16 @@ def _is_repeat(run, name, args):
     return count > 1
 
 
+def _research_limit_reached(run, name):
+    """Bound semantically repetitive research even when query wording changes."""
+    limits = {"web_search": 2, "fetch_page": 2}
+    if name not in limits:
+        return False
+    prior = sum(1 for message in run.msgs
+                if message.get("role") == "tool" and message.get("tool_name") == name)
+    return prior >= limits[name]
+
+
 def _compact_messages(messages):
     """Clip older transcript prose/results while preserving message and tool ordering."""
     total = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
@@ -233,18 +243,14 @@ def _process(run, calls):
         if _is_repeat(run, name, args):
             out = ("You already ran this exact call and have its result above. Do NOT repeat it. "
                    "Answer now with what you have, or say the information isn't available, then call finish.")
-        elif name in {"web_search", "fetch_page"}:
-            # Semantic loop guard: small local models often paraphrase the same search.
-            # Cap research actions per run even when arguments differ slightly.
-            limit = 2 if name == "web_search" else 2
+        elif _research_limit_reached(run, name):
             prior = sum(1 for message in run.msgs
                         if message.get("role") == "tool" and message.get("tool_name") == name)
-            if prior >= limit:
-                out = (f"Research limit reached: {name} has already been used {prior} times. "
-                       "Do not search again. Answer from the evidence already collected, or ask one "
-                       "brief clarifying question if the user's request is genuinely ambiguous.")
-            else:
-                out = execute(name, args, run)
+            out = (f"Research limit reached: {name} has already been used {prior} times. "
+                   "Do not search again. Answer from the evidence already collected, or ask one "
+                   "brief clarifying question if the user's request is genuinely ambiguous.")
+        elif name in {"web_search", "fetch_page"}:
+            out = execute(name, args, run)
         else:
             out = execute(name, args, run)
         run.msgs.append({"role": "tool", "tool_name": name, "content": out})
