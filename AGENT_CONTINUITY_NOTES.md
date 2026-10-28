@@ -23,7 +23,7 @@ The agent's instruction previously said to search the web before writing anythin
 4. **Bounded generation and network wait:** agent model rounds request at most 2,048 generated tokens and use connect/read timeouts. The response is closed in a `finally` block.
 5. **Graceful failure:** model-round exceptions emit an error plus a user-visible explanation, preserve prior tool results, and stop instead of leaving the run active.
 6. **Terminal finish:** `finish` is terminal; queued calls after it are not executed. Resuming a run no longer resets a `done` state that was set by `finish`.
-7. **Semantic research cap:** at most two web searches and two page fetches per run, even when the model paraphrases the query or URL. Further attempts receive a tool result telling the model to use evidence already collected.
+7. **Semantic research cap:** at most two web searches and one page fetch per run, even when the model paraphrases the query or URL. Further attempts receive a tool result telling the model to use evidence already collected.
 8. **Empty-answer recovery:** if the model returns neither tool calls nor user-facing text, Pyggie makes one tool-free recovery round asking for a direct answer or a concise clarification.
 9. **Tests:** regression tests cover transcript compaction, duplicate read-only calls, and semantic research limits.
 
