@@ -1,5 +1,17 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Vision relay (Claude, 2026-10-28)** — an image-reader model describes images for the chat model.
+> - `ollama.describe_image(model, b64)`: non-streaming `/api/chat` call with `VISION_PROMPT`.
+> - `files.build_history(chat, caps, vision_model="")`: if `vision_model` is set, every image is described by it
+>   and the chat model only receives that text (no `images` field), even if the chat model could see. Empty = old
+>   behaviour. Descriptions are cached in `Attachment.text` as `<vision model>\0<description>` (no migration;
+>   changing the vision model re-describes). Failure → a note in the prompt, not a crash.
+> - `views.send_message` / `agent_send`: read the `vision_model` request field.
+> - UI: Settings → "Image reader (vision model)", lists only ◉ models, saved in `localStorage['Clank.r.visionModel']`,
+>   sent as `vision_model` with each message.
+> Tested with a mock Ollama (relay, cache on follow-up, off = old behaviour, failure note) and the dropdown in Chromium.
+> Not tested with real models. Known gap: no "describing image…" status while the vision call runs (UI shows "Sending").
+
 > **Attach-icon fix (Claude, 2026-10-28)**: `.attach-btn` set no `color`, so its `currentColor` icon fell back to the
 > browser's black button text. It now uses `var(--muted)` (hover `var(--accent)`) and is larger (font-size 1.1rem → 1.6rem).
 

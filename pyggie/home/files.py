@@ -1,6 +1,7 @@
 # home/files.py — turn uploaded files into something the model can read
 import base64, io
 from .models import Attachment
+from . import ollama
 
 MAX_BYTES = 10 * 1024 * 1024     # per file
 MAX_FILES = 5
@@ -42,8 +43,24 @@ def save_attachments(message, uploads):
     return errors
 
 
-def build_history(chat, caps=()):
-    """Chat history for the model, with attachments folded into the user messages."""
+def _describe(a, vision_model):
+    """Description of an image attachment from the chosen vision model, cached on the attachment
+    (Attachment.text, stored as '<vision model>\\0<description>', so a new vision model re-describes)."""
+    if a.text.startswith(vision_model + "\0"):
+        return a.text.split("\0", 1)[1]
+    desc = ollama.describe_image(vision_model, a.image_b64)
+    if not desc:
+        raise RuntimeError("the vision model returned no description")
+    a.text = vision_model + "\0" + desc
+    a.save(update_fields=["text"])
+    return desc
+
+
+def build_history(chat, caps=(), vision_model=""):
+    """Chat history for the model, with attachments folded into the user messages.
+
+    Images: if `vision_model` is set, it describes each image first and the chat model only
+    receives that text. Otherwise images go straight to the chat model if it can see them."""
     out = []
     for m in chat.messages.filter(role__in=["user", "ai"]).prefetch_related("attachments"):
         if m.role == "ai":
@@ -51,7 +68,12 @@ def build_history(chat, caps=()):
         content, images = m.content, []
         for a in m.attachments.all():
             if a.kind == "image":
-                if "vision" in caps: images.append(a.image_b64)
+                if vision_model:
+                    try:
+                        content += f"\n\n[Attached image {a.name}, described by a vision model:]\n{_describe(a, vision_model)}"
+                    except Exception as e:
+                        content += f"\n\n[Attached image {a.name}: the vision model could not describe it ({ollama.friendly_error(e)})]"
+                elif "vision" in caps: images.append(a.image_b64)
                 else: content += f"\n\n[Attached image {a.name}: this model cannot see images]"
             else:
                 content += f"\n\n[Attached file: {a.name}]\n```\n{a.text}\n```"

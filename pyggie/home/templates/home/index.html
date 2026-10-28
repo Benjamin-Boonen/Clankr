@@ -1375,6 +1375,12 @@
       </div>
 
       <div class="modal-section">
+        <label class="modal-label" for="visionModel">Image reader (vision model)</label>
+        <select id="visionModel"></select>
+        <div class="modal-note">When set, attached images are first described by this model, and your chosen chat model receives that text. Only models marked ◉ are listed. Saved in this browser.</div>
+      </div>
+
+      <div class="modal-section">
         <label class="modal-label" for="hueSlider">Accent colour</label>
         <div class="swatches" id="swatches">
           <button class="swatch" style="--sw:100" data-hue="100" title="Green"></button>
@@ -1523,6 +1529,19 @@
       try {localStorage.setItem('Clank.r.defaultModel', defaultSel.value);} catch (e) { }
       modelSel.value = defaultSel.value;
       paintModelPicker();
+    });
+
+    // ─── image reader: a vision model that describes images for the chat model ───
+    const visionSel = document.getElementById('visionModel');
+    visionSel.innerHTML = '<option value="">None — send images straight to the chat model</option>' +
+      [...modelSel.options].filter(o => o.text.includes('◉') && o.value)
+        .map(o => `<option value="${o.value}">${o.text.replace(/\u00a0/g, ' ').trim()}</option>`).join('');
+    try {
+      const v = localStorage.getItem('Clank.r.visionModel');
+      if (v && [...visionSel.options].some(o => o.value === v)) visionSel.value = v;
+    } catch (e) { }
+    visionSel.addEventListener('change', () => {
+      try {localStorage.setItem('Clank.r.visionModel', visionSel.value);} catch (e) { }
     });
 
     // ─── accent colour ───
@@ -1866,7 +1885,7 @@
       const abort = new AbortController();
       activeCtx = ctx; activeAbort = abort;
       const agent = document.getElementById('agentMode').checked;
-      const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
+      const fields = {content: text, model: modelSel.value, chat_id: currentChatId, vision_model: visionSel.value};
       let resp;
       try {
       if (files.length) {

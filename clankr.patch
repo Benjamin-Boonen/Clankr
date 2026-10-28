@@ -1,45 +1,192 @@
-From 6605679fb9068dea55fc811d6e49000c7563dee8 Mon Sep 17 00:00:00 2001
+From c510ef71bc10872b02a096cc736779d084fe71a0 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Wed, 28 Oct 2026 11:58:46 +0100
-Subject: [PATCH] Fix attach button icon: theme colour and larger size
+Date: Wed, 28 Oct 2026 12:03:11 +0100
+Subject: [PATCH] Add vision relay: a chosen vision model describes images for
+ the chat model
 
-.attach-btn had no color, so currentColor resolved to black. Use --muted / --accent on hover, font-size 1.6rem.
+- ollama.describe_image(); files.build_history(vision_model=...) with per-attachment cache
+- views: accept vision_model on /send/ and /agent/send/
+- Settings: "Image reader (vision model)" dropdown (vision-capable models only)
+- CHANGES.md: document
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01PYWF5DEBkW3yKS3tvDRXHL
 ---
- CHANGES.md                            | 3 +++
- pyggie/home/templates/home/index.html | 5 +++--
- 2 files changed, 6 insertions(+), 2 deletions(-)
+ CHANGES.md                            | 12 ++++++++++++
+ pyggie/home/files.py                  | 28 ++++++++++++++++++++++++---
+ pyggie/home/ollama.py                 | 15 ++++++++++++++
+ pyggie/home/templates/home/index.html | 21 +++++++++++++++++++-
+ pyggie/home/views.py                  |  4 ++--
+ 5 files changed, 74 insertions(+), 6 deletions(-)
 
 diff --git a/CHANGES.md b/CHANGES.md
-index b1f9658..ff496d4 100644
+index ff496d4..cd6db06 100644
 --- a/CHANGES.md
 +++ b/CHANGES.md
-@@ -1,5 +1,8 @@
+@@ -1,5 +1,17 @@
  # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
  
-+> **Attach-icon fix (Claude, 2026-10-28)**: `.attach-btn` set no `color`, so its `currentColor` icon fell back to the
-+> browser's black button text. It now uses `var(--muted)` (hover `var(--accent)`) and is larger (font-size 1.1rem → 1.6rem).
++> **Vision relay (Claude, 2026-10-28)** — an image-reader model describes images for the chat model.
++> - `ollama.describe_image(model, b64)`: non-streaming `/api/chat` call with `VISION_PROMPT`.
++> - `files.build_history(chat, caps, vision_model="")`: if `vision_model` is set, every image is described by it
++>   and the chat model only receives that text (no `images` field), even if the chat model could see. Empty = old
++>   behaviour. Descriptions are cached in `Attachment.text` as `<vision model>\0<description>` (no migration;
++>   changing the vision model re-describes). Failure → a note in the prompt, not a crash.
++> - `views.send_message` / `agent_send`: read the `vision_model` request field.
++> - UI: Settings → "Image reader (vision model)", lists only ◉ models, saved in `localStorage['Clank.r.visionModel']`,
++>   sent as `vision_model` with each message.
++> Tested with a mock Ollama (relay, cache on follow-up, off = old behaviour, failure note) and the dropdown in Chromium.
++> Not tested with real models. Known gap: no "describing image…" status while the vision call runs (UI shows "Sending").
 +
- > **Icon fix (Claude, 2026-10-28)** — `home/templates/home/index.html`, `home/static/icons/`.
- > SVG Repo icons shipped with hardcoded `fill/stroke="#000"` and `width/height="800px"`, so they were black
- > and mis-sized. 1. `cleanIcon()` (run in `loadIcons`) strips the XML prolog/comments/title, the fixed
+ > **Attach-icon fix (Claude, 2026-10-28)**: `.attach-btn` set no `color`, so its `currentColor` icon fell back to the
+ > browser's black button text. It now uses `var(--muted)` (hover `var(--accent)`) and is larger (font-size 1.1rem → 1.6rem).
+ 
+diff --git a/pyggie/home/files.py b/pyggie/home/files.py
+index 9a07c86..cd5b379 100644
+--- a/pyggie/home/files.py
++++ b/pyggie/home/files.py
+@@ -1,6 +1,7 @@
+ # home/files.py — turn uploaded files into something the model can read
+ import base64, io
+ from .models import Attachment
++from . import ollama
+ 
+ MAX_BYTES = 10 * 1024 * 1024     # per file
+ MAX_FILES = 5
+@@ -42,8 +43,24 @@ def save_attachments(message, uploads):
+     return errors
+ 
+ 
+-def build_history(chat, caps=()):
+-    """Chat history for the model, with attachments folded into the user messages."""
++def _describe(a, vision_model):
++    """Description of an image attachment from the chosen vision model, cached on the attachment
++    (Attachment.text, stored as '<vision model>\\0<description>', so a new vision model re-describes)."""
++    if a.text.startswith(vision_model + "\0"):
++        return a.text.split("\0", 1)[1]
++    desc = ollama.describe_image(vision_model, a.image_b64)
++    if not desc:
++        raise RuntimeError("the vision model returned no description")
++    a.text = vision_model + "\0" + desc
++    a.save(update_fields=["text"])
++    return desc
++
++
++def build_history(chat, caps=(), vision_model=""):
++    """Chat history for the model, with attachments folded into the user messages.
++
++    Images: if `vision_model` is set, it describes each image first and the chat model only
++    receives that text. Otherwise images go straight to the chat model if it can see them."""
+     out = []
+     for m in chat.messages.filter(role__in=["user", "ai"]).prefetch_related("attachments"):
+         if m.role == "ai":
+@@ -51,7 +68,12 @@ def build_history(chat, caps=()):
+         content, images = m.content, []
+         for a in m.attachments.all():
+             if a.kind == "image":
+-                if "vision" in caps: images.append(a.image_b64)
++                if vision_model:
++                    try:
++                        content += f"\n\n[Attached image {a.name}, described by a vision model:]\n{_describe(a, vision_model)}"
++                    except Exception as e:
++                        content += f"\n\n[Attached image {a.name}: the vision model could not describe it ({ollama.friendly_error(e)})]"
++                elif "vision" in caps: images.append(a.image_b64)
+                 else: content += f"\n\n[Attached image {a.name}: this model cannot see images]"
+             else:
+                 content += f"\n\n[Attached file: {a.name}]\n```\n{a.text}\n```"
+diff --git a/pyggie/home/ollama.py b/pyggie/home/ollama.py
+index b9634ee..3468525 100644
+--- a/pyggie/home/ollama.py
++++ b/pyggie/home/ollama.py
+@@ -75,6 +75,21 @@ def get_caps(name):
+     return tuple(r.json().get("capabilities", []))
+ 
+ 
++VISION_PROMPT = (
++    "Describe this image in detail for someone who cannot see it. Transcribe all visible text exactly. "
++    "Report objects, people, layout, colours, and any numbers, labels or chart values. Do not speculate beyond what is visible."
++)
++
++
++def describe_image(model, image_b64):
++    """Ask a vision model to describe one image (non-streaming). Returns the description text."""
++    r = requests.post(f"{OLLAMA_BASE}/api/chat", timeout=300, json={
++        "model": model, "stream": False, "options": {"temperature": 0.2},
++        "messages": [{"role": "user", "content": VISION_PROMPT, "images": [image_b64]}]})
++    _check(r)
++    return (r.json().get("message", {}).get("content") or "").strip()
++
++
+ # capability symbols kept on the flat <option> text (Settings copies that text).
+ # The top-bar picker does not draw these; it groups by family / model / size.
+ CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index 46adcf5..5321c37 100644
+index 5321c37..8ba0b77 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -544,8 +544,9 @@
-       margin-bottom: 0;
-     }
+@@ -1374,6 +1374,12 @@
+         <div class="modal-note">Used when you open Clank.r. Saved in this browser.</div>
+       </div>
  
--    .attach-btn {background:none;border:none;cursor:pointer;font-size:1.1rem;opacity:.7;padding:0 .4rem}
--    .attach-btn:hover {opacity:1}
-+    .attach-btn {background:none;border:none;cursor:pointer;font-size:1.6rem;color:var(--muted);padding:0 .4rem;
-+                 display:inline-flex;align-items:center;transition:color .15s}
-+    .attach-btn:hover {color:var(--accent)}
-     .file-chips {display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.4rem}
-     .file-chips span {font-size:.75rem;border:1px solid rgba(128,128,128,.5);border-radius:999px;padding:.1rem .6rem;cursor:pointer}
-     .file-chips span:hover {text-decoration:line-through}
++      <div class="modal-section">
++        <label class="modal-label" for="visionModel">Image reader (vision model)</label>
++        <select id="visionModel"></select>
++        <div class="modal-note">When set, attached images are first described by this model, and your chosen chat model receives that text. Only models marked ◉ are listed. Saved in this browser.</div>
++      </div>
++
+       <div class="modal-section">
+         <label class="modal-label" for="hueSlider">Accent colour</label>
+         <div class="swatches" id="swatches">
+@@ -1525,6 +1531,19 @@
+       paintModelPicker();
+     });
+ 
++    // ─── image reader: a vision model that describes images for the chat model ───
++    const visionSel = document.getElementById('visionModel');
++    visionSel.innerHTML = '<option value="">None — send images straight to the chat model</option>' +
++      [...modelSel.options].filter(o => o.text.includes('◉') && o.value)
++        .map(o => `<option value="${o.value}">${o.text.replace(/\u00a0/g, ' ').trim()}</option>`).join('');
++    try {
++      const v = localStorage.getItem('Clank.r.visionModel');
++      if (v && [...visionSel.options].some(o => o.value === v)) visionSel.value = v;
++    } catch (e) { }
++    visionSel.addEventListener('change', () => {
++      try {localStorage.setItem('Clank.r.visionModel', visionSel.value);} catch (e) { }
++    });
++
+     // ─── accent colour ───
+     const hueSlider = document.getElementById('hueSlider');
+     const swatches = document.querySelectorAll('.swatch');
+@@ -1866,7 +1885,7 @@
+       const abort = new AbortController();
+       activeCtx = ctx; activeAbort = abort;
+       const agent = document.getElementById('agentMode').checked;
+-      const fields = {content: text, model: modelSel.value, chat_id: currentChatId};
++      const fields = {content: text, model: modelSel.value, chat_id: currentChatId, vision_model: visionSel.value};
+       let resp;
+       try {
+       if (files.length) {
+diff --git a/pyggie/home/views.py b/pyggie/home/views.py
+index 9849727..28c278a 100644
+--- a/pyggie/home/views.py
++++ b/pyggie/home/views.py
+@@ -57,7 +57,7 @@ def send_message(request):
+ 
+     msg = Message.objects.create(chat=chat, role='user', content=content)
+     upload_errors = files.save_attachments(msg, uploads)
+-    history = files.build_history(chat, ollama.get_caps(model))
++    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
+     cache.delete(_stop_key(chat.id))
+ 
+     full_reply = []
+@@ -130,7 +130,7 @@ def agent_send(request):
+     upload_errors = files.save_attachments(msg, uploads)
+     cache.delete(_stop_key(chat.id))
+     agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
+-    history = files.build_history(chat, ollama.get_caps(model))
++    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
+     run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
+     def gen():
+         if upload_errors:
 -- 
 2.43.0

@@ -75,6 +75,21 @@ def get_caps(name):
     return tuple(r.json().get("capabilities", []))
 
 
+VISION_PROMPT = (
+    "Describe this image in detail for someone who cannot see it. Transcribe all visible text exactly. "
+    "Report objects, people, layout, colours, and any numbers, labels or chart values. Do not speculate beyond what is visible."
+)
+
+
+def describe_image(model, image_b64):
+    """Ask a vision model to describe one image (non-streaming). Returns the description text."""
+    r = requests.post(f"{OLLAMA_BASE}/api/chat", timeout=300, json={
+        "model": model, "stream": False, "options": {"temperature": 0.2},
+        "messages": [{"role": "user", "content": VISION_PROMPT, "images": [image_b64]}]})
+    _check(r)
+    return (r.json().get("message", {}).get("content") or "").strip()
+
+
 # capability symbols kept on the flat <option> text (Settings copies that text).
 # The top-bar picker does not draw these; it groups by family / model / size.
 CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images

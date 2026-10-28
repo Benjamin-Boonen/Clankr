@@ -57,7 +57,7 @@ def send_message(request):
 
     msg = Message.objects.create(chat=chat, role='user', content=content)
     upload_errors = files.save_attachments(msg, uploads)
-    history = files.build_history(chat, ollama.get_caps(model))
+    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
     cache.delete(_stop_key(chat.id))
 
     full_reply = []
@@ -130,7 +130,7 @@ def agent_send(request):
     upload_errors = files.save_attachments(msg, uploads)
     cache.delete(_stop_key(chat.id))
     agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
-    history = files.build_history(chat, ollama.get_caps(model))
+    history = files.build_history(chat, ollama.get_caps(model), data.get('vision_model', '').strip())
     run = AgentRun.objects.create(chat=chat, model=model, msgs=history)
     def gen():
         if upload_errors:
