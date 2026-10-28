@@ -213,7 +213,7 @@ def _model_round(model, run, allow_tools=True):
             call["function"]["arguments"] = ollama.parse_args(call["function"].get("arguments"))
         run.last = ("".join(text), calls)
     finally:
-        resp.close()    run.last = ("".join(text), calls)
+        resp.close()
 
 def _process(run, calls):
     """Run calls in order. If one needs approval, park the rest in run.pending and stop."""
@@ -275,7 +275,6 @@ def drive(run, model):
                 yield "token", "*(The model finished its work but wrote no final answer — see the tool activity above.)*"
             break
         yield from _process(run, calls)
-        if run.pending: run.save(); return        yield from _process(run, calls)
         if run.pending: run.save(); return        # paused
     if not run.done:
         # Step limit reached: force ONE final round without tools so the user
