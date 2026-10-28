@@ -246,9 +246,10 @@ def _process(run, calls):
         elif _research_limit_reached(run, name):
             prior = sum(1 for message in run.msgs
                         if message.get("role") == "tool" and message.get("tool_name") == name)
+            run.research_exhausted = True
             out = (f"Research limit reached: {name} has already been used {prior} times. "
-                   "Do not search again. Answer from the evidence already collected, or ask one "
-                   "brief clarifying question if the user's request is genuinely ambiguous.")
+                   "Further research is disabled for this run. Answer from the evidence already "
+                   "collected, or ask one brief clarifying question if the request is ambiguous.")
         elif name in {"web_search", "fetch_page"}:
             out = execute(name, args, run)
         else:
@@ -278,7 +279,7 @@ def drive(run, model):
         run.steps += 1
         yield "step", run.steps
         try:
-            yield from _model_round(model, run)
+            yield from _model_round(model, run, allow_tools=not getattr(run, "research_exhausted", False))
         except Exception as exc:
             yield "error", ollama.friendly_error(exc)
             yield "token", ("\n\nI couldn't complete the remaining steps because the model request failed. "
