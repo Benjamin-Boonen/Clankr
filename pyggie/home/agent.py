@@ -65,7 +65,7 @@ def _is_repeat(run, name, args):
 
 def _research_limit_reached(run, name):
     """Bound semantically repetitive research even when query wording changes."""
-    limits = {"web_search": 1, "fetch_page": 1}
+    limits = {"web_search": 2, "fetch_page": 1}
     if name not in limits:
         return False
     prior = sum(1 for message in run.msgs
