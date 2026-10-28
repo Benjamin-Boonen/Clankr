@@ -1,5 +1,23 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Icon fix (Claude, 2026-10-28)** — `home/templates/home/index.html`, `home/static/icons/`.
+> SVG Repo icons shipped with hardcoded `fill/stroke="#000"` and `width/height="800px"`, so they were black
+> and mis-sized. 1. `cleanIcon()` (run in `loadIcons`) strips the XML prolog/comments/title, the fixed
+> width/height, and makes unfilled shapes inherit `currentColor`. 2. CSS `.icon svg …[fill]/[stroke]` forces
+> `currentColor` over any hardcoded colour (works for future icons too). 3. Renamed `artifact_*.svg` →
+> `artifact-*.svg`: the code asks for `artifact-html` etc. (as the README.txt says), so they never loaded.
+> Checked by rendering every icon in headless Chromium.
+
+> **Agent-loop fix (Claude, 2026-10-28)** — `pyggie/home/agent.py` only.
+> Problem: agent mode could loop forever re-running the same `web_search` (seen when the
+> user's question had a false premise, so nothing could satisfy the model).
+> 1. `_is_repeat()` — an identical call to an idempotent tool (`web_search`, `fetch_page`,
+>    `read_file`, `load_skill`) is NOT executed again; the model gets a "you already have this,
+>    answer or finish" message instead. `run_python`/`run_shell`/`write_file` are exempt (retries are legitimate).
+> 2. `MAX_STEPS` 25 → 15 (the existing tools-free final round still guarantees a report).
+> 3. `AGENT_PROMPT`: never repeat a call; if results don't contain the answer, say so and `finish`.
+> Not run against a live Ollama here — please test with a false-premise question.
+
 > **v3 follow-up patch (0003)**: avatar activity indicator, background setting,
 > agent-mode switch. All in `pyggie/home/templates/home/index.html`:
 > 1. The spinning dashed ring around the AI logo is replaced by a **Dyson-swarm**

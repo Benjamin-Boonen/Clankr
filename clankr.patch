@@ -1,585 +1,98 @@
-diff --git a/pyggie/home/ollama.py b/pyggie/home/ollama.py
-index 36f5e4f..b9634ee 100644
---- a/pyggie/home/ollama.py
-+++ b/pyggie/home/ollama.py
-@@ -75,10 +75,59 @@ def get_caps(name):
-     return tuple(r.json().get("capabilities", []))
+From 879c4bdb40af873279f4fd3a44b59c016efb35eb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 11:54:39 +0100
+Subject: [PATCH 2/2] Fix icon colour and scaling (SVG Repo icons rendered
+ black/mis-sized)
+
+- index.html: cleanIcon() strips fixed width/height, prolog, comments; unfilled shapes inherit currentColor
+- index.html: CSS forces currentColor over hardcoded fill/stroke in .icon svg
+- icons: rename artifact_*.svg -> artifact-*.svg to match the keys the code requests
+- CHANGES.md: document
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PYWF5DEBkW3yKS3tvDRXHL
+---
+ CHANGES.md                                    |  8 ++++++++
+ .../{artifact_html.svg => artifact-html.svg}  |  0
+ ...act_markdown.svg => artifact-markdown.svg} |  0
+ .../{artifact_svg.svg => artifact-svg.svg}    |  0
+ pyggie/home/templates/home/index.html         | 20 +++++++++++++++++--
+ 5 files changed, 26 insertions(+), 2 deletions(-)
+ rename pyggie/home/static/icons/{artifact_html.svg => artifact-html.svg} (100%)
+ rename pyggie/home/static/icons/{artifact_markdown.svg => artifact-markdown.svg} (100%)
+ rename pyggie/home/static/icons/{artifact_svg.svg => artifact-svg.svg} (100%)
+
+diff --git a/CHANGES.md b/CHANGES.md
+index b052bcc..b1f9658 100644
+--- a/CHANGES.md
++++ b/CHANGES.md
+@@ -1,5 +1,13 @@
+ # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
  
- 
--# capability symbols shown after a model's name
-+# capability symbols kept on the flat <option> text (Settings copies that text).
-+# The top-bar picker does not draw these; it groups by family / model / size.
- CAP_SYMBOLS = [("thinking", "∿"), ("tools", "⚙"), ("vision", "◉")]   # ∿ thinking · ⚙ tools · ◉ sees images
- 
- 
-+def _model_token(word):
-+    """'r1' -> 'R1'; 'coder' -> 'Coder'; '2.5' stays '2.5'."""
-+    if re.fullmatch(r"[A-Za-z]\d+(?:\.\d+)*", word):
-+        return word.upper()
-+    return word[:1].upper() + word[1:]
++> **Icon fix (Claude, 2026-10-28)** — `home/templates/home/index.html`, `home/static/icons/`.
++> SVG Repo icons shipped with hardcoded `fill/stroke="#000"` and `width/height="800px"`, so they were black
++> and mis-sized. 1. `cleanIcon()` (run in `loadIcons`) strips the XML prolog/comments/title, the fixed
++> width/height, and makes unfilled shapes inherit `currentColor`. 2. CSS `.icon svg …[fill]/[stroke]` forces
++> `currentColor` over any hardcoded colour (works for future icons too). 3. Renamed `artifact_*.svg` →
++> `artifact-*.svg`: the code asks for `artifact-html` etc. (as the README.txt says), so they never loaded.
++> Checked by rendering every icon in headless Chromium.
 +
-+
-+def split_ollama_name(name):
-+    """Split an Ollama id into the three picker levels.
-+
-+    Family is the leading A–Z run, after a namespace/ is stripped.
-+    Model is the rest of the name (before ':'), or 'Base' when there is none.
-+    Size is the tag after ':', uppercased; a missing tag or 'latest' is 'Latest'.
-+
-+    'phi4-mini:4b'        -> Phi / 4 Mini / 4B
-+    'qwen2.5-coder:7b'    -> Qwen / 2.5 Coder / 7B
-+    'deepseek-r1:14b'     -> Deepseek / R1 / 14B
-+    'mistral:7b'          -> Mistral / Base / 7B
-+    'dolphin-mistral:7b'  -> Dolphin / Mistral / 7B
-+    'user/foo-bar:Q4_K_M' -> Foo / Bar / Q4_K_M
-+
-+    family_key is [a-z0-9]+ and matches static/icons/family-<key>.svg.
-+    """
-+    base, _, size = name.partition(":")
-+    if "/" in base:
-+        base = base.rsplit("/", 1)[-1]
-+    matched = re.match(r"^([A-Za-z]+)(.*)$", base)
-+    if matched and matched.group(1):
-+        family_raw, rest = matched.group(1), matched.group(2).lstrip("-_.")
-+    else:
-+        family_raw, rest = "other", base
-+    family = family_raw[:1].upper() + family_raw[1:]
-+    if rest:
-+        model = " ".join(_model_token(w) for w in re.split(r"[-_\s]+", rest) if w) or "Base"
-+    else:
-+        model = "Base"
-+    if not size or size.lower() == "latest":
-+        size_label = "Latest"
-+    else:
-+        size_label = size.upper()
-+    return {
-+        "family": family,
-+        "family_key": re.sub(r"[^a-z0-9]", "", family_raw.lower()) or "other",
-+        "model": model,
-+        "size": size_label,
-+    }
-+
-+
- def pretty_name(name):
-     """'phi4-mini:4b' -> 'Phi 4 Mini · 4B'; 'gemma4:e3b' -> 'Gemma 4 · E3B'."""
-     base, _, size = name.partition(":")
-@@ -91,14 +140,26 @@ def pretty_name(name):
- 
- 
- def get_models():
--    """[{'name': 'qwen3:8b', 'label': 'Qwen 3 · 8B', 'tag': '∿ ⚙'}, ...]"""
-+    """[{name, label, tag, family, family_key, model, size}, ...]
-+
-+    name is the raw Ollama id sent to /send/ and /agent/send/. Do not rename it.
-+    label + tag are the flat option text. Settings (#defaultModel) copies
-+    #modelSelect's innerHTML, so both must stay. The top bar reads family /
-+    family_key / model / size and ignores the joined label.
-+    """
-     resp = requests.get(f"{OLLAMA_BASE}/api/tags")
-     _check(resp)
-     out = []
-     for m in resp.json()['models']:
-         caps = get_caps(m['name'])
-         tag = " ".join(sym for cap, sym in CAP_SYMBOLS if cap in caps)
--        out.append({"name": m['name'], "label": pretty_name(m['name']), "tag": tag})
-+        parts = split_ollama_name(m['name'])
-+        out.append({
-+            "name": m["name"],
-+            "label": f"{parts['family']} · {parts['model']} · {parts['size']}",
-+            "tag": tag,
-+            **parts,
-+        })
-     return out
- 
- 
-diff --git a/pyggie/home/static/icons/README.txt b/pyggie/home/static/icons/README.txt
-index 4864f4e..df82535 100644
---- a/pyggie/home/static/icons/README.txt
-+++ b/pyggie/home/static/icons/README.txt
-@@ -12,3 +12,12 @@ Artifacts (Artifacts panel):
- Other:
-   skill.svg            (Skills panel)
-   attach.svg           (attach-file button)
-+
-+Model picker — family column only (model and size are text):
-+  family-<key>.svg
-+  key = leading letters of the Ollama name, lowercased.
-+  llama3.1:8b -> family-llama.svg,  qwen2.5-coder:7b -> family-qwen.svg,
-+  deepseek-r1:14b -> family-deepseek.svg, mistral:7b -> family-mistral.svg.
-+  A missing file falls back to a letter monogram drawn in the page.
-+  Drop a 24x24 currentColor SVG here to replace that family's mark.
-+  Do not put these on <option> elements: a native select cannot draw SVG.
-diff --git a/pyggie/home/static/icons/family-deepseek.svg b/pyggie/home/static/icons/family-deepseek.svg
-new file mode 100644
-index 0000000..4194069
---- /dev/null
-+++ b/pyggie/home/static/icons/family-deepseek.svg
-@@ -0,0 +1,5 @@
-+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-+  <circle cx="11" cy="11" r="6"/>
-+  <path d="M15.5 15.5 20 20"/>
-+  <path d="M11 8.2v3.4l2.2 1.3"/>
-+</svg>
-diff --git a/pyggie/home/static/icons/family-gemma.svg b/pyggie/home/static/icons/family-gemma.svg
-new file mode 100644
-index 0000000..6ec05f4
---- /dev/null
-+++ b/pyggie/home/static/icons/family-gemma.svg
-@@ -0,0 +1,5 @@
-+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
-+  <path d="M12 3.5 18.5 8.5 12 20.5 5.5 8.5Z"/>
-+  <path d="M5.5 8.5h13"/>
-+  <path d="M12 8.5 9.2 20M12 8.5l2.8 11.5"/>
-+</svg>
-diff --git a/pyggie/home/static/icons/family-llama.svg b/pyggie/home/static/icons/family-llama.svg
-new file mode 100644
-index 0000000..534e3e3
---- /dev/null
-+++ b/pyggie/home/static/icons/family-llama.svg
-@@ -0,0 +1,4 @@
-+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
-+  <path d="M4.5 16.5c.6-5 2.6-8.5 4.8-8.5 1.3 0 1.8 2.2 2.7 2.2s1.4-2.2 2.7-2.2c2.2 0 4.2 3.5 4.8 8.5"/>
-+  <path d="M8 16.2c.7 1.8 2.2 2.8 4 2.8s3.3-1 4-2.8"/>
-+</svg>
-diff --git a/pyggie/home/static/icons/family-mistral.svg b/pyggie/home/static/icons/family-mistral.svg
-new file mode 100644
-index 0000000..88b0cc7
---- /dev/null
-+++ b/pyggie/home/static/icons/family-mistral.svg
-@@ -0,0 +1,5 @@
-+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-+  <path d="M4 7.5h9"/>
-+  <path d="M8 12h10"/>
-+  <path d="M4 16.5h9"/>
-+</svg>
-diff --git a/pyggie/home/static/icons/family-phi.svg b/pyggie/home/static/icons/family-phi.svg
-new file mode 100644
-index 0000000..4b95c52
---- /dev/null
-+++ b/pyggie/home/static/icons/family-phi.svg
-@@ -0,0 +1,5 @@
-+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-+  <circle cx="12" cy="13" r="4"/>
-+  <path d="M12 3.5v17"/>
-+  <path d="M8 8.2h8"/>
-+</svg>
-diff --git a/pyggie/home/static/icons/family-qwen.svg b/pyggie/home/static/icons/family-qwen.svg
-new file mode 100644
-index 0000000..66defd0
---- /dev/null
-+++ b/pyggie/home/static/icons/family-qwen.svg
-@@ -0,0 +1,5 @@
-+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-+  <path d="M15.2 7.2a4.6 4.6 0 1 0 1.5 6.4"/>
-+  <path d="M16.6 13.2 19 16.4"/>
-+  <circle cx="13.4" cy="11.6" r="1" fill="currentColor" stroke="none"/>
-+</svg>
+ > **Agent-loop fix (Claude, 2026-10-28)** — `pyggie/home/agent.py` only.
+ > Problem: agent mode could loop forever re-running the same `web_search` (seen when the
+ > user's question had a false premise, so nothing could satisfy the model).
+diff --git a/pyggie/home/static/icons/artifact_html.svg b/pyggie/home/static/icons/artifact-html.svg
+similarity index 100%
+rename from pyggie/home/static/icons/artifact_html.svg
+rename to pyggie/home/static/icons/artifact-html.svg
+diff --git a/pyggie/home/static/icons/artifact_markdown.svg b/pyggie/home/static/icons/artifact-markdown.svg
+similarity index 100%
+rename from pyggie/home/static/icons/artifact_markdown.svg
+rename to pyggie/home/static/icons/artifact-markdown.svg
+diff --git a/pyggie/home/static/icons/artifact_svg.svg b/pyggie/home/static/icons/artifact-svg.svg
+similarity index 100%
+rename from pyggie/home/static/icons/artifact_svg.svg
+rename to pyggie/home/static/icons/artifact-svg.svg
 diff --git a/pyggie/home/templates/home/index.html b/pyggie/home/templates/home/index.html
-index eeddcda..2037ce7 100644
+index 2037ce7..46adcf5 100644
 --- a/pyggie/home/templates/home/index.html
 +++ b/pyggie/home/templates/home/index.html
-@@ -243,27 +243,32 @@
-     }
+@@ -1043,7 +1043,10 @@
+     /* ─── icons: SVG files from home/static/icons/, or a text fallback ─── */
+     .icon {display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+            width: 1em; height: 1em; margin-right: 0.4em; vertical-align: -0.15em; line-height: 1}
+-    .icon svg {width: 100%; height: 100%; display: block}
++    .icon svg {width: 100%; height: 100%; display: block; overflow: visible}
++    /* theme colour wins over any hardcoded black (#000, #222…) in downloaded icon files */
++    .icon svg[fill]:not([fill="none"]), .icon svg [fill]:not([fill="none"]) {fill: currentColor}
++    .icon svg[stroke]:not([stroke="none"]), .icon svg [stroke]:not([stroke="none"]) {stroke: currentColor}
+     .attach-btn .icon {margin: 0}
  
-     .topbar {
--      height: 52px;
--      padding: 0 24px;
-+      min-height: 52px;
-+      padding: 8px 16px;
-       border-bottom: 1px solid var(--border);
-       display: flex;
-       align-items: center;
-       justify-content: space-between;
-       flex-shrink: 0;
-+      flex-wrap: wrap;
-+      gap: 8px;
+     /* ─── tool notices (collapsible) ─── */
+@@ -1995,11 +1998,24 @@
+     function fillIcons() {
+       document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = iconHtml(el.dataset.icon); });
      }
- 
-     .model-badge {
-       display: flex;
-       align-items: center;
--      gap: 7px;
-+      gap: 6px;
-       font-family: var(--font-mono);
-       font-size: 12px;
-       color: var(--muted);
--      padding: 5px 10px;
-+      padding: 4px 8px 4px 10px;
-       border-radius: 20px;
-       border: 1px solid var(--border);
--      cursor: pointer;
--      transition: border-color 0.15s, color 0.15s;
-+      position: relative;
-+      z-index: 2;
-+      flex: 1 1 auto;
-+      min-width: 0;
-+      flex-wrap: wrap;
-     }
- 
-     .model-badge:hover {
-@@ -271,19 +276,77 @@
-       color: var(--text);
-     }
- 
--    .model-badge select {
--      background: transparent;
-+    /* native select stays in the DOM: #modelSelect.value is what /send/ posts,
-+       and Settings copies its options. It cannot draw SVG, so it is not shown. */
-+    .model-native {
-+      position: absolute;
-+      width: 1px;
-+      height: 1px;
-+      opacity: 0;
-+      pointer-events: none;
++    // Make a downloaded SVG (e.g. from SVG Repo) behave like a theme icon: drop the XML
++    // prolog/comments/scripts, drop the fixed width/height (CSS sizes it; viewBox scales it),
++    // and let unfilled shapes inherit currentColor instead of defaulting to black.
++    function cleanIcon(txt) {
++      txt = txt.replace(/<\?xml[\s\S]*?\?>/gi, '').replace(/<!--[\s\S]*?-->/g, '')
++               .replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<(title|desc)>[\s\S]*?<\/\1>/gi, '').trim();
++      return txt.replace(/<svg\b[^>]*>/i, tag => {
++        tag = tag.replace(/\s(width|height)="[^"]*"/gi, '');
++        if (!/\sfill=/i.test(tag)) tag = tag.replace(/<svg\b/i, '<svg fill="currentColor"');
++        if (!/\sviewBox=/i.test(tag)) tag = tag.replace(/<svg\b/i, '<svg viewBox="0 0 24 24"');
++        return tag;
++      });
 +    }
-+
-+    .mp {position: relative; min-width: 0}
-+    .mp-btn {
-+      display: flex;
-+      flex-direction: column;
-+      align-items: flex-start;
-+      gap: 1px;
-+      max-width: 9rem;
-+      background: none;
-       border: none;
--      outline: none;
-       color: inherit;
-       font: inherit;
-       cursor: pointer;
-+      padding: 1px 2px;
-+      border-radius: 6px;
-     }
--
--    .model-badge select option {
-+    .mp-btn:focus-visible {outline: 2px solid var(--accent); outline-offset: 2px}
-+    .mp-btn:disabled {cursor: default; opacity: .6}
-+    .mp-k {
-+      font-size: 8px;
-+      letter-spacing: .14em;
-+      text-transform: uppercase;
-+      color: var(--muted);
-+      line-height: 1;
-+    }
-+    .mp-v {display: flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0}
-+    .mp-txt {overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text)}
-+    .mp-fam {width: 15px; height: 15px; margin: 0; flex-shrink: 0}
-+    .mp-fam svg {width: 100%; height: 100%; display: block}
-+    .mp-sep {opacity: .35; user-select: none; padding: 0 1px}
-+    .mp-menu {
-+      position: absolute;
-+      top: calc(100% + 8px);
-+      left: 0;
-+      z-index: 30;
-+      min-width: max(100%, 9rem);
-+      max-height: 280px;
-+      overflow: auto;
-+      margin: 0;
-+      padding: 4px;
-+      list-style: none;
-       background: var(--surface);
-+      border: 1px solid var(--border2);
-+      border-radius: 10px;
-+      box-shadow: 0 12px 40px hsl(0 0% 0% / .45);
-+    }
-+    .mp[data-level="size"] .mp-menu {left: auto; right: 0}
-+    .mp-menu[hidden] {display: none}
-+    .mp-menu li {
-+      display: flex;
-+      align-items: center;
-+      gap: 8px;
-+      padding: 6px 8px;
-+      border-radius: 7px;
-+      cursor: pointer;
-+      white-space: nowrap;
-       color: var(--text);
-     }
-+    .mp-menu li[aria-selected="true"] {background: var(--accent-a15)}
-+    .mp-menu li.mp-on, .mp-menu li:hover {background: var(--surface2)}
-+    .mp-menu li.mp-empty {color: var(--muted); cursor: default}
-+    .mp-menu .mp-fam {width: 16px; height: 16px}
- 
-     .dot {
-       width: 6px;
-@@ -1050,6 +1113,7 @@
-       pointer-events: none; z-index: 0; opacity: .5;
-     }
-     .main > .topbar, .main > .messages, .main > .input-area {position: relative; z-index: 1}
-+    .main > .topbar {z-index: 4}
- 
-     /* jump-to-latest */
-     .latest-btn {
-@@ -1170,15 +1234,38 @@
-             <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" />
-           </svg>
-         </button>
--        <div class="model-badge">
-+        <div class="model-badge" id="modelPicker">
-           <div class="dot"></div>
--          <select id="modelSelect">
-+          <select id="modelSelect" class="model-native" tabindex="-1" aria-hidden="true">
-             {% for m in models %}
--            <option value="{{ m.name }}">{{ m.label }}{% if m.tag %} &nbsp;{{ m.tag }}{% endif %}</option>
-+            <option value="{{ m.name }}" data-family="{{ m.family_key }}" data-family-label="{{ m.family }}" data-model="{{ m.model }}" data-size="{{ m.size }}">{{ m.label }}{% if m.tag %} &nbsp;{{ m.tag }}{% endif %}</option>
-             {% empty %}
-             <option value="">no models found</option>
-             {% endfor %}
-           </select>
-+          <div class="mp" data-level="family">
-+            <button type="button" class="mp-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelMenuFamily">
-+              <span class="mp-k">Family</span>
-+              <span class="mp-v"><span class="mp-fam" data-family-icon=""></span><span class="mp-txt">—</span></span>
-+            </button>
-+            <ul class="mp-menu" id="modelMenuFamily" role="listbox" hidden></ul>
-+          </div>
-+          <span class="mp-sep" aria-hidden="true">/</span>
-+          <div class="mp" data-level="model">
-+            <button type="button" class="mp-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelMenuModel">
-+              <span class="mp-k">Model</span>
-+              <span class="mp-v"><span class="mp-txt">—</span></span>
-+            </button>
-+            <ul class="mp-menu" id="modelMenuModel" role="listbox" hidden></ul>
-+          </div>
-+          <span class="mp-sep" aria-hidden="true">/</span>
-+          <div class="mp" data-level="size">
-+            <button type="button" class="mp-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelMenuSize">
-+              <span class="mp-k">Size</span>
-+              <span class="mp-v"><span class="mp-txt">—</span></span>
-+            </button>
-+            <ul class="mp-menu" id="modelMenuSize" role="listbox" hidden></ul>
-+          </div>
-           <label class="agent-toggle" title="Agent mode: Clank.r keeps using tools until the task is done">
-             <input type="checkbox" id="agentMode">
-             <span class="ag-sw" aria-hidden="true"></span>
-@@ -1431,6 +1518,7 @@
-     defaultSel.addEventListener('change', () => {
-       try {localStorage.setItem('Clank.r.defaultModel', defaultSel.value);} catch (e) { }
-       modelSel.value = defaultSel.value;
-+      paintModelPicker();
-     });
- 
-     // ─── accent colour ───
-@@ -1915,8 +2003,223 @@
+     async function loadIcons() {
+       await Promise.all(Object.keys(ICON_FALLBACK).map(async name => {
+         try {
+           const r = await fetch(ICON_BASE + name + '.svg');
+-          if (r.ok) iconSvg[name] = (await r.text()).trim().replace(/<script[\s\S]*?<\/script>/gi, '');
++          if (r.ok) iconSvg[name] = cleanIcon(await r.text());
          } catch (e) { /* keep the fallback */ }
        }));
        fillIcons();
-+      paintModelPicker();
-+    }
-+    // ─── model picker: Family / Model / Size ───
-+    // #modelSelect stays the value store (raw Ollama id in .value). This UI only
-+    // reflects it. Family SVGs: icons/family-<key>.svg, else a letter monogram.
-+    // Do not put data-icon on these nodes — fillIcons() replaces that node's
-+    // whole innerHTML and would wipe the Family / Model / Size labels.
-+    let paintModelPicker = function () {};
-+    function familyMonogram(label) {
-+      const ch = ((String(label).match(/[A-Za-z0-9]/) || ['?'])[0]).toUpperCase();
-+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><text x="12" y="16" text-anchor="middle" font-size="11" font-family="ui-monospace,monospace" fill="currentColor" stroke="none">${ch}</text></svg>`;
-+    }
-+    function initModelPicker() {
-+      const root = document.getElementById('modelPicker');
-+      if (!root || root.dataset.ready) return;
-+      root.dataset.ready = '1';
-+      const levels = ['family', 'model', 'size'];
-+      const menus = {}, buttons = {};
-+      levels.forEach(level => {
-+        const wrap = root.querySelector(`.mp[data-level="${level}"]`);
-+        menus[level] = wrap.querySelector('.mp-menu');
-+        buttons[level] = wrap.querySelector('.mp-btn');
-+        buttons[level].addEventListener('click', () => {
-+          if (menus[level].hidden) openMenu(level);
-+          else closeMenus();
-+        });
-+      });
-+      function entries() {
-+        return [...modelSel.options].filter(o => o.value).map(o => ({
-+          name: o.value,
-+          family: o.dataset.family || 'other',
-+          familyLabel: o.dataset.familyLabel || 'Other',
-+          model: o.dataset.model || 'Base',
-+          size: o.dataset.size || 'Latest',
-+        }));
-+      }
-+      function current() {
-+        return entries().find(e => e.name === modelSel.value) || entries()[0] || null;
-+      }
-+      function byNum(a, b, pick) {
-+        return pick(a).localeCompare(pick(b), undefined, {numeric: true});
-+      }
-+      function sizeRank(s) {
-+        const m = String(s).match(/(\d+(?:\.\d+)?)/);
-+        return m ? parseFloat(m[1]) : 1e9;
-+      }
-+      function prefer(list, cur) {
-+        return list.find(x => x.model === cur.model && x.size === cur.size)
-+          || list.find(x => x.model === cur.model)
-+          || list.find(x => x.size === cur.size)
-+          || list[0];
-+      }
-+      function optionsFor(level, cur) {
-+        const all = entries();
-+        if (!cur) return [];
-+        if (level === 'family') {
-+          const seen = new Map();
-+          all.forEach(e => { if (!seen.has(e.family)) seen.set(e.family, e); });
-+          return [...seen.values()]
-+            .sort((a, b) => byNum(a, b, e => e.familyLabel))
-+            .map(e => ({
-+              label: e.familyLabel,
-+              key: e.family,
-+              selected: e.family === cur.family,
-+              pick: prefer(all.filter(x => x.family === e.family), cur).name,
-+            }));
-+        }
-+        if (level === 'model') {
-+          const inFam = all.filter(e => e.family === cur.family);
-+          const seen = new Map();
-+          inFam.forEach(e => { if (!seen.has(e.model)) seen.set(e.model, e); });
-+          return [...seen.values()]
-+            .sort((a, b) => byNum(a, b, e => e.model))
-+            .map(e => ({
-+              label: e.model,
-+              selected: e.model === cur.model,
-+              pick: (inFam.find(x => x.model === e.model && x.size === cur.size)
-+                || inFam.find(x => x.model === e.model)).name,
-+            }));
-+        }
-+        const sizes = all.filter(e => e.family === cur.family && e.model === cur.model);
-+        const dup = {};
-+        sizes.forEach(e => { dup[e.size] = (dup[e.size] || 0) + 1; });
-+        return sizes
-+          .slice()
-+          .sort((a, b) => sizeRank(a.size) - sizeRank(b.size) || a.size.localeCompare(b.size))
-+          .map(e => ({
-+            label: dup[e.size] > 1 ? e.size + ' · ' + e.name : e.size,
-+            selected: e.name === cur.name,
-+            pick: e.name,
-+          }));
-+      }
-+      function iconBody(key) {
-+        return iconSvg[key] || ICON_FALLBACK[key] || '';
-+      }
-+      function closeMenus() {
-+        levels.forEach(level => {
-+          menus[level].hidden = true;
-+          buttons[level].setAttribute('aria-expanded', 'false');
-+        });
-+      }
-+      function choose(name) {
-+        if (!name || ![...modelSel.options].some(o => o.value === name)) return;
-+        modelSel.value = name;
-+        closeMenus();
-+        paintModelPicker();
-+      }
-+      function openMenu(level) {
-+        closeMenus();
-+        const cur = current();
-+        const items = optionsFor(level, cur);
-+        const menu = menus[level];
-+        menu.innerHTML = '';
-+        if (!items.length) {
-+          const empty = document.createElement('li');
-+          empty.className = 'mp-empty';
-+          empty.textContent = 'No models';
-+          menu.append(empty);
-+        }
-+        items.forEach((item, i) => {
-+          const li = document.createElement('li');
-+          li.setAttribute('role', 'option');
-+          li.tabIndex = -1;
-+          li.setAttribute('aria-selected', item.selected ? 'true' : 'false');
-+          if (item.selected) li.classList.add('mp-on');
-+          if (level === 'family') {
-+            const ic = document.createElement('span');
-+            ic.className = 'mp-fam';
-+            ic.dataset.familyIcon = 'family-' + item.key;
-+            ic.innerHTML = iconBody('family-' + item.key);
-+            const tx = document.createElement('span');
-+            tx.textContent = item.label;
-+            li.append(ic, tx);
-+          } else {
-+            li.textContent = item.label;
-+          }
-+          li.addEventListener('click', () => choose(item.pick));
-+          li.addEventListener('keydown', ev => {
-+            const rows = [...menu.querySelectorAll('[role="option"]')];
-+            const idx = rows.indexOf(li);
-+            if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
-+              ev.preventDefault();
-+              const next = rows[idx + (ev.key === 'ArrowDown' ? 1 : -1)];
-+              if (next) { rows.forEach(r => r.classList.remove('mp-on')); next.classList.add('mp-on'); next.focus(); }
-+            } else if (ev.key === 'Enter') {
-+              ev.preventDefault();
-+              choose(item.pick);
-+            } else if (ev.key === 'Escape') {
-+              ev.preventDefault();
-+              closeMenus();
-+              buttons[level].focus();
-+            } else if (ev.key === 'Tab') {
-+              closeMenus();
-+            }
-+          });
-+          menu.append(li);
-+          if (item.selected) menu._focus = li;
-+        });
-+        menu.hidden = false;
-+        buttons[level].setAttribute('aria-expanded', 'true');
-+        (menu._focus || menu.querySelector('[role="option"]'))?.focus();
-+      }
-+      buttons.family.addEventListener('keydown', e => onBtnKey(e, 'family'));
-+      buttons.model.addEventListener('keydown', e => onBtnKey(e, 'model'));
-+      buttons.size.addEventListener('keydown', e => onBtnKey(e, 'size'));
-+      function onBtnKey(e, level) {
-+        // Enter and Space already activate the button's click handler.
-+        // Handling them here too would open the menu and immediately close it.
-+        if (e.key === 'ArrowDown') {
-+          e.preventDefault();
-+          openMenu(level);
-+        }
-+      }
-+      document.addEventListener('mousedown', e => {
-+        if (!root.contains(e.target)) closeMenus();
-+      });
-+      paintModelPicker = function () {
-+        const cur = current();
-+        entries().forEach(e => {
-+          const k = 'family-' + e.family;
-+          if (!ICON_FALLBACK[k]) ICON_FALLBACK[k] = familyMonogram(e.familyLabel);
-+        });
-+        const famIcon = root.querySelector('[data-level="family"] .mp-fam');
-+        const texts = {
-+          family: root.querySelector('[data-level="family"] .mp-txt'),
-+          model: root.querySelector('[data-level="model"] .mp-txt'),
-+          size: root.querySelector('[data-level="size"] .mp-txt'),
-+        };
-+        if (!cur) {
-+          texts.family.textContent = 'No models';
-+          texts.model.textContent = '—';
-+          texts.size.textContent = '—';
-+          famIcon.innerHTML = '';
-+          levels.forEach(l => { buttons[l].disabled = true; });
-+          return;
-+        }
-+        levels.forEach(l => { buttons[l].disabled = false; });
-+        texts.family.textContent = cur.familyLabel;
-+        texts.model.textContent = cur.model;
-+        texts.size.textContent = cur.size;
-+        famIcon.dataset.familyIcon = 'family-' + cur.family;
-+        famIcon.innerHTML = iconBody('family-' + cur.family);
-+        buttons.family.setAttribute('aria-label', 'Family, ' + cur.familyLabel);
-+        buttons.model.setAttribute('aria-label', 'Model, ' + cur.model);
-+        buttons.size.setAttribute('aria-label', 'Size, ' + cur.size);
-+        root.querySelectorAll('.mp-menu .mp-fam').forEach(el => {
-+          el.innerHTML = iconBody(el.dataset.familyIcon);
-+        });
-+      };
-+      entries().forEach(e => {
-+        const k = 'family-' + e.family;
-+        if (!ICON_FALLBACK[k]) ICON_FALLBACK[k] = familyMonogram(e.familyLabel);
-+      });
-+      paintModelPicker();
-     }
-     fillIcons();
-+    initModelPicker();
-     loadIcons();
- 
-     function makeToolNotice(tool) {
-
+-- 
+2.43.0

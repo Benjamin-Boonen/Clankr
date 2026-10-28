@@ -1043,7 +1043,10 @@
     /* ─── icons: SVG files from home/static/icons/, or a text fallback ─── */
     .icon {display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
            width: 1em; height: 1em; margin-right: 0.4em; vertical-align: -0.15em; line-height: 1}
-    .icon svg {width: 100%; height: 100%; display: block}
+    .icon svg {width: 100%; height: 100%; display: block; overflow: visible}
+    /* theme colour wins over any hardcoded black (#000, #222…) in downloaded icon files */
+    .icon svg[fill]:not([fill="none"]), .icon svg [fill]:not([fill="none"]) {fill: currentColor}
+    .icon svg[stroke]:not([stroke="none"]), .icon svg [stroke]:not([stroke="none"]) {stroke: currentColor}
     .attach-btn .icon {margin: 0}
 
     /* ─── tool notices (collapsible) ─── */
@@ -1995,11 +1998,24 @@
     function fillIcons() {
       document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = iconHtml(el.dataset.icon); });
     }
+    // Make a downloaded SVG (e.g. from SVG Repo) behave like a theme icon: drop the XML
+    // prolog/comments/scripts, drop the fixed width/height (CSS sizes it; viewBox scales it),
+    // and let unfilled shapes inherit currentColor instead of defaulting to black.
+    function cleanIcon(txt) {
+      txt = txt.replace(/<\?xml[\s\S]*?\?>/gi, '').replace(/<!--[\s\S]*?-->/g, '')
+               .replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<(title|desc)>[\s\S]*?<\/\1>/gi, '').trim();
+      return txt.replace(/<svg\b[^>]*>/i, tag => {
+        tag = tag.replace(/\s(width|height)="[^"]*"/gi, '');
+        if (!/\sfill=/i.test(tag)) tag = tag.replace(/<svg\b/i, '<svg fill="currentColor"');
+        if (!/\sviewBox=/i.test(tag)) tag = tag.replace(/<svg\b/i, '<svg viewBox="0 0 24 24"');
+        return tag;
+      });
+    }
     async function loadIcons() {
       await Promise.all(Object.keys(ICON_FALLBACK).map(async name => {
         try {
           const r = await fetch(ICON_BASE + name + '.svg');
-          if (r.ok) iconSvg[name] = (await r.text()).trim().replace(/<script[\s\S]*?<\/script>/gi, '');
+          if (r.ok) iconSvg[name] = cleanIcon(await r.text());
         } catch (e) { /* keep the fallback */ }
       }));
       fillIcons();

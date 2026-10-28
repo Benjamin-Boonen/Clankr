@@ -8,7 +8,8 @@ import requests
 from . import ollama
 from .models import Artifact
 
-MAX_STEPS = 25            # hard cap on model calls per run
+MAX_STEPS = 15            # hard cap on model calls per run
+REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill"}   # idempotent: repeating adds nothing
 OUT_CHARS = 8000          # tool output the model gets to see
 SKILL_DIR = Path(__file__).parent / "skills"
 HAS_BWRAP = shutil.which("bwrap") is not None
@@ -41,8 +42,23 @@ AGENT_PROMPT = (
     "User-attached files are already in the workspace (read_file / run_python). Some tools ask the user for permission; "
     "if denied, adapt. run_python has NO network access — never try web or API calls in code; use web_search/fetch_page instead. "
     "When completely done, call finish(summary) with what you did and what the results are. "
-    "Never write tool calls as text."
+    "Never write tool calls as text. "
+    "Never repeat a tool call with the same arguments: you already have its result. If the results do not "
+    "contain what the user asked for (or the premise seems false), say so and call finish — do not keep searching."
 )
+
+def _is_repeat(run, name, args):
+    """True if an idempotent tool was already called with identical args earlier in this run.
+    (The current call is already in run.msgs, so one earlier match means a repeat.)"""
+    if name not in REPEAT_SAFE: return False
+    key = json.dumps(args, sort_keys=True)
+    n = 0
+    for m in run.msgs:
+        for c in m.get("tool_calls") or []:
+            f = c["function"]
+            if f["name"] == name and json.dumps(ollama.parse_args(f.get("arguments")), sort_keys=True) == key:
+                n += 1
+    return n > 1
 
 # Preamble for run_python when no OS sandbox (bwrap) is available: Python-level
 # network block. Best-effort (ctypes/raw sockets can bypass it) — which is why
@@ -183,7 +199,11 @@ def _process(run, calls):
         calls.pop(0)
         label = next(iter(args.values()), "") if args else ""
         yield "tool", {"name": name, "arg": label}
-        out = execute(name, args, run)
+        if _is_repeat(run, name, args):
+            out = ("You already ran this exact call and have its result above. Do NOT repeat it. "
+                   "Answer now with what you have, or say the information isn't available, then call finish.")
+        else:
+            out = execute(name, args, run)
         run.msgs.append({"role": "tool", "tool_name": name, "content": out})
         yield "result", {"name": name, "out": out[:1500]}
         if name == "finish" and run.summary:
