@@ -8,6 +8,8 @@ import requests
 import trafilatura
 from ddgs import DDGS
 
+from . import plots
+
 OLLAMA_BASE = "http://localhost:11434"
 
 MAX_ROUNDS = 5       # max tool-calling rounds per answer
@@ -245,16 +247,18 @@ def run_tool(name, args):
         return f"Tool error: {e}"
 
 
-def chat_stream(model, messages):
+def chat_stream(model, messages, chat_id=None):
     """Yields (kind, value):
          ("thinking", text)             reasoning tokens
          ("tool", {"name", "arg"})      a tool is being run
+         ("artifact", {id,title,kind})  a plot tool stored a graph in chat `chat_id`
          ("token", text)                the answer
          ("status", text)               progress note for the status line (e.g. loading the model)
     """
-    system = SYSTEM_PROMPT + f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
-    msgs = [{"role": "system", "content": system}] + messages
     caps = get_caps(model)
+    system = SYSTEM_PROMPT + (plots.PLOT_PROMPT if "tools" in caps else "") + \
+        f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
+    msgs = [{"role": "system", "content": system}] + messages
     if not is_loaded(model):
         yield "status", load_notice(model)
 
@@ -265,7 +269,7 @@ def chat_stream(model, messages):
             payload["think"] = True
         # on the last round, withhold tools so the model must answer
         if "tools" in caps and round_no < MAX_ROUNDS - 1:
-            payload["tools"] = TOOLS
+            payload["tools"] = TOOLS + plots.TOOLS
 
         resp = requests.post(f"{OLLAMA_BASE}/api/chat", json=payload, stream=True)
         _check(resp)
@@ -299,5 +303,10 @@ def chat_stream(model, messages):
             args = parse_args(fn.get("arguments"))
             label = next(iter(args.values()), "") if args else ""
             yield "tool", {"name": fn["name"], "arg": label}
-            msgs.append({"role": "tool", "tool_name": fn["name"],
-                         "content": run_tool(fn["name"], args)})
+            if plots.is_plot_tool(fn["name"]):
+                out, art = plots.run_for_chat(fn["name"], args, chat_id)
+                if art:
+                    yield "artifact", art
+            else:
+                out = run_tool(fn["name"], args)
+            msgs.append({"role": "tool", "tool_name": fn["name"], "content": out})

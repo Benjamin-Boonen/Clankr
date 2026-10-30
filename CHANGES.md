@@ -1,5 +1,42 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Graph tools (Claude, 2026-10-30)** — the model can draw interactive 2D/3D graphs. New file `pyggie/home/plots.py`.
+> - Tools (plain chat AND agent mode): `plot_2d(exprs, x_min, x_max[, y_min, y_max, title, x_label, y_label])`
+>   curves y=f(x); `plot_3d(expr, x_min, x_max, y_min, y_max[, style=surface|contour, ...])` z=f(x,y);
+>   `plot_curve(x, y[, z], t_min, t_max)` parametric curve, 2D or 3D. Range limits may be formulas ("2*pi").
+> - Flow: model calls tool → `plots.run_for_chat()` samples with NumPy, builds a Plotly figure (JSON), stores it as an
+>   `Artifact(kind="plot")` and returns a short text summary to the model (min/max, undefined points: it cannot see the
+>   picture) → SSE `artifact` event → the existing `artifactFrame()` iframe shows it. Because it is an Artifact it also
+>   survives a reload (`get_chat`) and shows in the Artifacts panel. No migration (`kind` has no choices).
+> - Drawing: `views.artifact_view` serves kind `plot` through `plots.render_page()`: Plotly.js v2.35.2 from jsDelivr
+>   (pinned, `PLOTLY_SRC`), inside the same sandboxed iframe + CSP as other artifacts. Needs internet in the BROWSER
+>   (like KaTeX/marked); offline it shows a message instead. White background to match `.artifact-frame`.
+> - **Safety: formulas are never `eval`'d.** `_parse` uses `ast`, `_eval` is a tiny interpreter that knows only numbers,
+>   `x/y/t`, `pi e tau`, `+ - * / ** %` and the `FUNCS` table. Attributes, strings, lambdas, subscripts, other calls are
+>   rejected with a message the model can fix. All values are float64 (so `9**9**9` is `inf`, not a hang). Limits:
+>   300 chars/formula, 6 curves, 600 samples (2D), 70x70 grid (3D), |range| <= 1e6. No network, no files, no approval needed.
+> - Nicer lines: values that are nan/inf/>1e12 become gaps; `_break_poles()` cuts the line across asymptotes (tan, 1/x)
+>   instead of drawing a vertical stroke; `plot_curve` in 2D keeps equal axis scale (a circle looks round).
+> - Wiring: `ollama.chat_stream(model, messages, chat_id=None)` (new `chat_id`, passed by `views.send_message`) adds
+>   `plots.TOOLS` and `plots.PLOT_PROMPT` only when the model has the `tools` capability; `agent.TOOLS` includes
+>   `plots.TOOLS`, `agent.execute()` handles plot tools before touching the workspace, and plots are in `REPEAT_SAFE`
+>   (an identical repeat is not drawn twice). Frontend: `toolStatus()` ("Plotting …") and 3 inline icons in
+>   `ICON_FALLBACK` (`plot_2d`, `plot_3d`, `plot_curve`; drop `<name>.svg` in `static/icons/` to restyle).
+> - Extend: new function → `FUNCS` (+`ARITY`); new tool → write `def tool(args) -> (title, figure, summary)`, add its schema to
+>   `TOOLS` and the function to `NAMES`; sampling density → `N2`, `N3`, `NCURVE`.
+> - Rebased on PR #2 (`AGENT_CONTINUITY_NOTES.md`): plot tools are exempt from its research cap (only `web_search` /
+>   `fetch_page` are capped), are in `REPEAT_SAFE`, and the transcript compaction does not touch them (their results are
+>   one short line). The agent prompt keeps PR #2's wording; `plots.PLOT_PROMPT` is appended to it.
+> - `requirements.txt`: added `numpy`.
+> - Tests: `cd pyggie && python manage.py test home` — 26 new tests, 29 in total with PR #2's (formula whitelist incl. 30 hostile inputs, 2D/3D/curve
+>   geometry and orientation, pole gaps, argument errors, artifact storage + page + per-user access, `</script>` breakout,
+>   agent `_process`, plain-chat stream with a fake Ollama). Mutation-checked: disabling pole cutting or allowing
+>   attribute access makes them fail. Also `manage.py check` and `node --check` on the page script.
+> - NOT tested: a real browser (Plotly.js could not be fetched where this was built, so the page, 3D rotation and the
+>   pinned CDN URL are unverified), and real models (does a sub-9B model call the tools well? try qwen2.5/llama3.1 first).
+> - Known gaps: dark theme for the plot (the iframe is white); no function-of-`t`/`r` polar plots; no data-point scatter
+>   plots (tool takes formulas only); the model gets a text summary, not the image, so it can misread a graph.
+
 > **Capability chips (Claude, 2026-10-28)**: the top bar now shows what the selected model can do.
 > - `ollama.get_models()` returns `caps` (subset of `vision`, `tools`, `thinking`); each `<option>` gets `data-caps="vision,tools"`.
 > - Top bar: three labelled chips (`#modelCaps`) after the Size picker. Lit accent pill = the model can, dashed

@@ -5,11 +5,11 @@ import json, os, re, shutil, subprocess, datetime
 from pathlib import Path
 from django.conf import settings
 import requests
-from . import ollama
+from . import ollama, plots
 from .models import Artifact
 
 MAX_STEPS = 15            # hard cap on model calls per run
-REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill"}
+REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill", *plots.NAMES}   # plots: an identical repeat is not drawn twice
 OUT_CHARS = 6000
 CONTEXT_CHARS = 36000
 RECENT_MESSAGES = 10
@@ -32,6 +32,7 @@ TOOLS = [
     _fn("load_skill", "Load detailed instructions for a skill. Available: " + ", ".join(
         sorted(p.name for p in SKILL_DIR.iterdir() if p.is_dir())) if SKILL_DIR.exists() else "load_skill",
         {"name": S}, ["name"]),
+    *plots.TOOLS,             # plot_2d, plot_3d, plot_curve (home/plots.py)
     _fn("finish", "Call when the task is fully done, with a short summary for the user.", {"summary": S}, ["summary"]),
 ]
 
@@ -46,6 +47,8 @@ AGENT_PROMPT = (
     "answer in text. User attachments are in the workspace. run_python has NO network access; use web_search or "
     "fetch_page for network research. Some tools require approval; if denied, adapt without retrying that action. "
     "When done, call finish(summary) with a concise, truthful report. Never write tool calls as text."
+    + plots.PLOT_PROMPT +
+    " Draw graphs with these tools, never with run_python/matplotlib (nothing displays from there)."
 )
 
 def _is_repeat(run, name, args):
@@ -148,6 +151,11 @@ def _clip(s):
     return s if len(s) <= OUT_CHARS else s[:OUT_CHARS] + "\n…[truncated]"
 
 def execute(name, args, run):
+    if plots.is_plot_tool(name):
+        # pure computation, no files and no host access: handled before the workspace is touched
+        out, art = plots.run_for_chat(name, args, run.chat_id)
+        if art: run.new_artifacts.append(art)     # _process/resume turn this into an "artifact" event
+        return out
     ws = workspace(run.chat_id)
     try:
         if "__raw__" in args:

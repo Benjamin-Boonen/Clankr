@@ -3,5 +3,6 @@ requests
 trafilatura
 ddgs
 pypdf
+numpy              # plot tools (home/plots.py): sampling formulas
 # Optional but strongly recommended: OS sandbox for run_python (network isolation)
 #   Debian/Ubuntu: sudo apt install bubblewrap

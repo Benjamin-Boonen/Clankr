@@ -6,7 +6,7 @@ from django.views.decorators.http import require_POST
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message, AgentRun, Artifact
-from . import agent, files
+from . import agent, files, plots
 from django.http import HttpResponse
 from django.core.cache import cache
 from . import ollama
@@ -101,7 +101,7 @@ def send_message(request):
             return
         # kind is 'token', 'thinking', 'tool' or 'status'; only the answer is saved.
         # finally: whatever was written is saved, even when stopped or disconnected
-        replies = ollama.chat_stream(model=model, messages=history)
+        replies = ollama.chat_stream(model=model, messages=history, chat_id=chat.id)
         try:
             for kind, value in replies:
                 if _stop_requested(chat.id):
@@ -202,6 +202,7 @@ def artifact_view(request, artifact_id):
     a = get_object_or_404(Artifact, id=artifact_id, chat__user=request.user)
     if a.kind == 'html':   body, ct = a.content, 'text/html'
     elif a.kind == 'svg':  body, ct = a.content, 'image/svg+xml'
+    elif a.kind == 'plot': body, ct = plots.render_page(a.title, a.content), 'text/html'   # Plotly figure JSON
     else:
         import html
         body, ct = f"<pre style='white-space:pre-wrap;font:14px system-ui;padding:1rem'>{html.escape(a.content)}</pre>", 'text/html'
