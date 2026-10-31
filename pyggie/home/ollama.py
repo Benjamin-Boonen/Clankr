@@ -317,9 +317,13 @@ def chat_stream(model, messages, chat_id=None):
 
         # No tool calls: this is the user-facing answer. Ollama's final chunk
         # identifies generation-limit stops; do not infer truncation from text.
-        msgs.append({"role": "assistant", "content": text})
         if (text.strip() and finish_reason in ("length", "max_tokens")
                 and continuation_count < 2):
+            # Add the partial assistant message only when a continuation is
+            # needed. Completed answers are returned to the caller, not fed
+            # back into the request transcript; this preserves the chat API's
+            # established message ordering and tool-result contract.
+            msgs.append({"role": "assistant", "content": text})
             continuation_count += 1
             msgs.append({"role": "user", "content":
                 "Your previous answer was cut off by the generation limit. Continue from the exact point where it stopped. "
