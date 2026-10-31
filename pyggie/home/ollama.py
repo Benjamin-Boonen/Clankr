@@ -2,6 +2,7 @@
 import json
 import re
 import datetime
+import logging
 from functools import lru_cache
 
 import requests
@@ -11,6 +12,7 @@ from ddgs import DDGS
 from . import plots, context
 
 OLLAMA_BASE = "http://localhost:11434"
+logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 5       # max tool-calling rounds per answer
 PAGE_CHARS = 6000    # how much of a fetched page the model gets to read
@@ -181,7 +183,17 @@ def get_models():
     _check(resp)
     out = []
     for m in resp.json()['models']:
-        caps = get_caps(m['name'])
+        # A single model with unsupported/corrupt GGUF metadata must not take
+        # down the entire model picker or homepage. Keep it selectable so the
+        # user can still see the installed model; without capabilities, the UI
+        # simply won't advertise tools/thinking/vision for it.
+        caps_error = None
+        try:
+            caps = get_caps(m['name'])
+        except Exception as exc:
+            logger.warning("Could not read capabilities for Ollama model %s: %s", m.get('name', '<unknown>'), exc)
+            caps = ()
+            caps_error = str(exc)
         tag = " ".join(sym for cap, sym in CAP_SYMBOLS if cap in caps)
         has = [cap for cap, _ in CAP_SYMBOLS if cap in caps]      # ['thinking', 'tools', 'vision'] subset
         parts = split_ollama_name(m['name'])
@@ -190,6 +202,7 @@ def get_models():
             "label": f"{parts['family']} · {parts['model']} · {parts['size']}",
             "tag": tag,
             "caps": has,
+            "caps_error": caps_error,
             **parts,
         })
     return out
