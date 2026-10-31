@@ -186,6 +186,15 @@ def agent_approve(request):
 
 @login_required
 @require_POST
+def delete_chat(request, chat_id):
+    """Permanently delete one of the current user's conversations and its related data."""
+    chat = get_object_or_404(Chat, id=chat_id, user=request.user)
+    chat.delete()  # Messages, attachments, artifacts and agent runs cascade with the chat.
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
 def stop_reply(request):
     """Ask the reply in progress in this chat to stop. The running stream checks
     this flag between chunks; a run waiting for approval is ended right here."""
@@ -205,6 +214,9 @@ def artifact_view(request, artifact_id):
     if a.kind == 'html':   body, ct = a.content, 'text/html'
     elif a.kind == 'svg':  body, ct = a.content, 'image/svg+xml'
     elif a.kind == 'plot': body, ct = plots.render_page(a.title, a.content), 'text/html'   # Plotly figure JSON
+    elif a.kind in ('python', 'shell'):
+        import html
+        body, ct = (f"<title>{html.escape(a.title)}</title><pre style='white-space:pre-wrap;overflow-wrap:anywhere;font:13px ui-monospace,monospace;padding:1rem'>{html.escape(a.content)}</pre>", 'text/html')
     else:
         import html
         body, ct = f"<pre style='white-space:pre-wrap;font:14px system-ui;padding:1rem'>{html.escape(a.content)}</pre>", 'text/html'
@@ -233,7 +245,7 @@ def artifact_create(request):
     title = (data.get('title') or 'Untitled').strip()[:200]
     kind = data.get('kind', 'markdown')
     content = data.get('content') or ''
-    if kind not in ('html', 'svg', 'markdown'):
+    if kind not in ('html', 'svg', 'markdown', 'python', 'shell'):
         return JsonResponse({'error': 'kind must be html, svg or markdown'}, status=400)
     if not content.strip():
         return JsonResponse({'error': 'content is empty'}, status=400)
