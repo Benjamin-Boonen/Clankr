@@ -10,17 +10,19 @@ Pyggie's agent and ordinary chat streams could treat an Ollama generation-limit 
 - Capture Ollama's `done_reason` from the final streamed JSON chunk.
 - When a text-only answer ends with `length` (or `max_tokens`), request a continuation with tools disabled and instructions not to repeat the existing answer.
 - Limit recovery to two continuation attempts per turn.
+- If a reasoning-capable model exhausts its budget without producing visible answer text, retry once with thinking disabled and tools disabled. This gives the output budget to the user-facing answer instead of hidden reasoning.
 - Keep the existing stream event contract; continuation tokens use the same `token` events and are persisted through the existing path.
 
 ### Ordinary chat — `pyggie/home/ollama.py`
 - Set an explicit 4,096-token generation budget for each model call.
 - Capture `done_reason` and continue only when the final answer is non-empty and Ollama reports `length` or `max_tokens`.
 - Limit continuation to two additional model calls.
+- If a reasoning-capable model hits the generation limit without producing visible text, retry once with `think: false`; keep tools disabled for that retry.
 - Disable tools for continuation calls so the model finishes the current answer instead of restarting research or performing additional actions.
 - Keep tool rounds bounded by the existing `MAX_ROUNDS`; continuation attempts do not consume that tool-round budget.
 
 ## Validation
-The first local test run reported 29 passing tests and one failure in `Wiring.test_plain_chat_stream_draws_plot`. The failure exposed a transcript-ordering issue: the completed assistant answer was appended to the in-memory message list after the request, and the test's captured request payload shared that mutable list. The completed-answer append was removed; a partial assistant message is added to the transcript only when a continuation is actually required. Please rerun the suite to verify this regression fix.
+The first local test run reported 29 passing tests and one failure in `Wiring.test_plain_chat_stream_draws_plot`. That transcript-ordering issue was fixed, and the user subsequently confirmed the test suite passes. The current revision adds a separate recovery path for reasoning-only generation-limit stops; rerun the suite after pulling this latest commit.
 
 Run from `pyggie/`:
 
@@ -34,6 +36,7 @@ Manual checks:
 2. Ask for a short answer; verify only one model response is made.
 3. Ask a question that requires a tool; verify the tool runs normally and the final answer can continue if it hits the generation limit.
 4. Use a model that supports thinking and confirm the visible answer is still handled correctly.
+5. Simulate a thinking-only response that ends with `done_reason: length`; verify the retry sends `think: false` and returns visible text.
 
 ## Scope / limitations
 Recovery depends on Ollama reporting `done_reason` as `length` or `max_tokens`. It cannot recover text lost because of a server crash, browser disconnect, context-window exhaustion, or a model that stops early while reporting `stop`. The two-continuation cap prevents runaway loops but does not guarantee every answer will fit within the model's context/output limits.
