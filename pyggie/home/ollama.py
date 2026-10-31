@@ -8,7 +8,7 @@ import requests
 import trafilatura
 from ddgs import DDGS
 
-from . import plots
+from . import plots, context
 
 OLLAMA_BASE = "http://localhost:11434"
 
@@ -256,7 +256,11 @@ def chat_stream(model, messages, chat_id=None):
     caps = get_caps(model)
     system = SYSTEM_PROMPT + (plots.PLOT_PROMPT if "tools" in caps else "") + \
         f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
-    msgs = [{"role": "system", "content": system}] + messages
+    pressure = context.context_pressure(messages)
+    if pressure["suggest_new_chat"]:
+        yield "status", ("This conversation is very long. Its full history is saved, but "
+                         "starting a new chat with a handoff summary may improve reliability.")
+    msgs = [{"role": "system", "content": system}] + context.compact_messages(messages)
     if not is_loaded(model):
         yield "status", load_notice(model)
 
