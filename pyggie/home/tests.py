@@ -64,6 +64,19 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertFalse(_research_limit_reached(Run(), "fetch_page"))
         self.assertFalse(_research_limit_reached(Run(), "run_python"))
 
+
+class PlotInstructionTests(SimpleTestCase):
+    def test_plot_guidance_requires_explicit_request_or_clear_necessity(self):
+        prompt = plots.PLOT_PROMPT.lower()
+        self.assertIn("graphing is optional, not the default", prompt)
+        self.assertIn("a request to solve, derive, calculate, apply a method", prompt)
+        self.assertIn("when unsure, answer without a graph", prompt)
+        descriptions = " ".join(
+            tool["function"]["description"].lower() for tool in plots.TOOLS
+        )
+        self.assertIn("only when", descriptions)
+
+
 def build(name, args):
     """Run a plot tool and return its figure; also checks the figure is strict JSON (no NaN)."""
     title, fig, summary = plots.NAMES[name](args)
