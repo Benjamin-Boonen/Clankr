@@ -202,7 +202,7 @@ def execute(name, args, run):
     except Exception as e:
         return f"Tool error: {e}"
 
-def _model_round(model, run, allow_tools=True):
+def _model_round(model, run, allow_tools=True, allow_thinking=True):
     """One streamed model call. Yields events; returns (text, tool_calls) via run.last."""
     caps = ollama.get_caps(model)
     if not ollama.is_loaded(model):
@@ -210,15 +210,16 @@ def _model_round(model, run, allow_tools=True):
     system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
              f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
     payload = {"model": model, "stream": True,
-               "options": {"temperature": 0.2, "num_predict": 2048},
+               "options": {"temperature": 0.2, "num_predict": 4096},
                "messages": [{"role": "system", "content": system}] + _compact_messages(run.msgs)}
-    if "thinking" in caps: payload["think"] = True
+    if "thinking" in caps: payload["think"] = allow_thinking
     if allow_tools and "tools" in caps: payload["tools"] = TOOLS
     resp = requests.post(f"{ollama.OLLAMA_BASE}/api/chat", json=payload,
                          stream=True, timeout=(15, 180))
     try:
         ollama._check(resp)
         text, calls = [], []
+        finish_reason = None
         for line in resp.iter_lines():
             if not line: continue
             c = json.loads(line); m = c.get("message", {})
@@ -226,9 +227,12 @@ def _model_round(model, run, allow_tools=True):
             if t := m.get("content"): text.append(t); yield "token", t
             for name, frag in ollama.merge_tool_calls(calls, m.get("tool_calls")):
                 yield "tool_arg", {"name": name or "", "delta": frag}
-            if c.get("done"): break
+            if c.get("done"):
+                finish_reason = c.get("done_reason")
+                break
         for call in calls:
             call["function"]["arguments"] = ollama.parse_args(call["function"].get("arguments"))
+        run.last_finish_reason = finish_reason
         run.last = ("".join(text), calls)
     finally:
         resp.close()
@@ -295,6 +299,30 @@ def drive(run, model):
             break
         text, calls = run.last
         run.msgs.append({"role": "assistant", "content": text, **({"tool_calls": calls} if calls else {})})
+        # Ollama reports done_reason="length" when generation hits num_predict.
+        # The streamed prefix is already visible, so continue without tools and
+        # explicitly tell the model not to repeat it. Bound recovery to avoid loops.
+        continuation_count = 0
+        while (not calls and text.strip()
+               and getattr(run, "last_finish_reason", None) in ("length", "max_tokens")
+               and continuation_count < 2):
+            continuation_count += 1
+            run.msgs.append({"role": "user", "content":
+                "Your previous answer was cut off by the generation limit. Continue from the exact point where it stopped. "
+                "Do not repeat or summarize the text already written; finish the answer naturally. Do not call tools."})
+            try:
+                yield from _model_round(model, run, allow_tools=False)
+                more, more_calls = run.last
+            except Exception as exc:
+                yield "error", ollama.friendly_error(exc)
+                break
+            if more.strip():
+                text += more
+                run.msgs.append({"role": "assistant", "content": more})
+            if more_calls:
+                break
+            if not more.strip() or getattr(run, "last_finish_reason", None) not in ("length", "max_tokens"):
+                break
         if not calls:
             if not text.strip():
                 # Some local reasoning models emit only hidden thinking, then stop.
@@ -305,7 +333,7 @@ def drive(run, model):
                     "If the request is ambiguous, ask one concise clarifying question. "
                     "Do not narrate your reasoning or your plan."})
                 try:
-                    yield from _model_round(model, run, allow_tools=False)
+                    yield from _model_round(model, run, allow_tools=False, allow_thinking=False)
                     recovery, _ = run.last
                 except Exception as exc:
                     yield "error", ollama.friendly_error(exc)

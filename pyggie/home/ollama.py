@@ -248,13 +248,10 @@ def run_tool(name, args):
 
 
 def chat_stream(model, messages, chat_id=None):
-    """Yields (kind, value):
-         ("thinking", text)             reasoning tokens
-         ("tool", {"name", "arg"})      a tool is being run
-         ("result", {"name", "out"})    that tool finished (the page needs this to close its notice)
-         ("artifact", {id,title,kind})  a plot tool stored a graph in chat `chat_id`
-         ("token", text)                the answer
-         ("status", text)               progress note for the status line (e.g. loading the model)
+    """Stream a chat answer, recovering from Ollama generation-limit stops.
+
+    Continuations are text-only and bounded: tool rounds remain governed by
+    MAX_ROUNDS, while a truncated final answer gets at most two extra calls.
     """
     caps = get_caps(model)
     system = SYSTEM_PROMPT + (plots.PLOT_PROMPT if "tools" in caps else "") + \
@@ -263,20 +260,24 @@ def chat_stream(model, messages, chat_id=None):
     if not is_loaded(model):
         yield "status", load_notice(model)
 
-    for round_no in range(MAX_ROUNDS):
+    continuation_count = 0
+    disable_thinking = False
+    round_no = 0
+    while round_no < MAX_ROUNDS:
         payload = {"model": model, "messages": msgs, "stream": True,
-                   "options": {"temperature": 0.2}}
+                   "options": {"temperature": 0.2, "num_predict": 4096}}
         if "thinking" in caps:
-            payload["think"] = True
-        # on the last round, withhold tools so the model must answer
-        if "tools" in caps and round_no < MAX_ROUNDS - 1:
+            payload["think"] = not disable_thinking
+        # Continuation calls never get tools: they should finish the current
+        # answer, not restart research or perform additional side effects.
+        if "tools" in caps and round_no < MAX_ROUNDS - 1 and continuation_count == 0:
             payload["tools"] = TOOLS + plots.TOOLS
 
         resp = requests.post(f"{OLLAMA_BASE}/api/chat", json=payload, stream=True)
-        _check(resp)
-
         content, tool_calls = [], []
+        finish_reason = None
         try:
+            _check(resp)
             for line in resp.iter_lines():
                 if not line:
                     continue
@@ -288,29 +289,60 @@ def chat_stream(model, messages, chat_id=None):
                     content.append(token)
                     yield "token", token
                 for name, frag in merge_tool_calls(tool_calls, m.get("tool_calls")):
-                    yield "tool_arg", {"name": name, "delta": frag}   # live, while typed
+                    yield "tool_arg", {"name": name, "delta": frag}
                 if chunk.get("done"):
+                    finish_reason = chunk.get("done_reason")
                     break
         finally:
             resp.close()      # stopping early must drop the connection to Ollama
 
-        if not tool_calls:
-            return
+        text = "".join(content)
+        if tool_calls:
+            msgs.append({"role": "assistant", "content": text, "tool_calls": tool_calls})
+            for call in tool_calls:
+                fn = call["function"]
+                args = parse_args(fn.get("arguments"))
+                label = next(iter(args.values()), "") if args else ""
+                yield "tool", {"name": fn["name"], "arg": label}
+                art = None
+                if plots.is_plot_tool(fn["name"]):
+                    out, art = plots.run_for_chat(fn["name"], args, chat_id)
+                else:
+                    out = run_tool(fn["name"], args)
+                msgs.append({"role": "tool", "tool_name": fn["name"], "content": out})
+                yield "result", {"name": fn["name"], "out": out[:1500]}
+                if art:
+                    yield "artifact", art
+            round_no += 1
+            continue
 
-        msgs.append({"role": "assistant", "content": "".join(content),
-                     "tool_calls": tool_calls})
-        for call in tool_calls:
-            fn = call["function"]
-            args = parse_args(fn.get("arguments"))
-            label = next(iter(args.values()), "") if args else ""
-            yield "tool", {"name": fn["name"], "arg": label}
-            art = None
-            if plots.is_plot_tool(fn["name"]):
-                out, art = plots.run_for_chat(fn["name"], args, chat_id)
-            else:
-                out = run_tool(fn["name"], args)
-            msgs.append({"role": "tool", "tool_name": fn["name"], "content": out})
-            # same events, same order as agent mode: the page closes the tool notice on "result"
-            yield "result", {"name": fn["name"], "out": out[:1500]}
-            if art:
-                yield "artifact", art
+        # Some reasoning models can spend the whole generation budget on
+        # hidden thinking and return no visible answer. Retry once with thinking
+        # disabled so the same output budget is available for user-facing text.
+        if (not text.strip() and finish_reason in ("length", "max_tokens")
+                and "thinking" in caps and not disable_thinking
+                and continuation_count < 2):
+            continuation_count += 1
+            disable_thinking = True
+            msgs.append({"role": "user", "content":
+                "Give the user-facing answer directly. Do not provide hidden reasoning, a plan, or tool calls. "
+                "Answer the original request using the conversation and available evidence."})
+            continue
+
+        # No tool calls: this is the user-facing answer. Ollama's final chunk
+        # identifies generation-limit stops; do not infer truncation from text.
+        if (text.strip() and finish_reason in ("length", "max_tokens")
+                and continuation_count < 2):
+            # Add the partial assistant message only when a continuation is
+            # needed. Completed answers are returned to the caller, not fed
+            # back into the request transcript; this preserves the chat API's
+            # established message ordering and tool-result contract.
+            msgs.append({"role": "assistant", "content": text})
+            continuation_count += 1
+            msgs.append({"role": "user", "content":
+                "Your previous answer was cut off by the generation limit. Continue from the exact point where it stopped. "
+                "Do not repeat or summarize text already written; finish the answer naturally. Do not call tools."})
+            # Keep round_no unchanged: continuations are bounded separately
+            # and must not consume the tool/research round budget.
+            continue
+        return
