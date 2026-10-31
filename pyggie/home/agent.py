@@ -280,7 +280,7 @@ def drive(run, model):
         run.steps += 1
         yield "step", run.steps
         try:
-            yield from _model_round(model, run, allow_tools=not getattr(run, "research_exhausted", False))
+            yield from _model_round(model, run, allow_tools=not getattr(run, "research_exhausted", False), allow_thinking=getattr(run, "thinking_enabled", True))
         except Exception as exc:
             yield "error", ollama.friendly_error(exc)
             yield "token", ("\n\nI couldn't complete the remaining steps because the model request failed. "
@@ -301,7 +301,7 @@ def drive(run, model):
                 "Your previous answer was cut off by the generation limit. Continue from the exact point where it stopped. "
                 "Do not repeat or summarize the text already written; finish the answer naturally. Do not call tools."})
             try:
-                yield from _model_round(model, run, allow_tools=False)
+                yield from _model_round(model, run, allow_tools=False, allow_thinking=getattr(run, "thinking_enabled", True))
                 more, more_calls = run.last
             except Exception as exc:
                 yield "error", ollama.friendly_error(exc)
@@ -346,7 +346,7 @@ def drive(run, model):
             "You have reached the step limit. WITHOUT calling any tools, tell the user in 2-4 sentences: "
             "what you completed, what is still missing, and where the results are (files or artifacts)."})
         try:
-            yield from _model_round(model, run, allow_tools=False)
+            yield from _model_round(model, run, allow_tools=False, allow_thinking=getattr(run, "thinking_enabled", True))
             text, _ = run.last
         except Exception as exc:
             yield "error", ollama.friendly_error(exc)

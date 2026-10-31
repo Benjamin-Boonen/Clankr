@@ -73,6 +73,7 @@ def send_message(request):
     data, uploads = _parse(request)
     content = data['content']
     model   = data.get('model', 'llama3')
+    thinking = data.get('thinking', True) is not False
     chat_id = data.get('chat_id')
 
     if chat_id:
@@ -101,7 +102,7 @@ def send_message(request):
             return
         # kind is 'token', 'thinking', 'tool' or 'status'; only the answer is saved.
         # finally: whatever was written is saved, even when stopped or disconnected
-        replies = ollama.chat_stream(model=model, messages=history, chat_id=chat.id)
+        replies = ollama.chat_stream(model=model, messages=history, chat_id=chat.id, thinking=thinking)
         try:
             for kind, value in replies:
                 if _stop_requested(chat.id):
@@ -153,6 +154,7 @@ def _agent_stream(run, chat, gen, prefix_events=()):
 def agent_send(request):
     data, uploads = _parse(request)
     content, model = data['content'], data.get('model', 'llama3')
+    thinking = data.get('thinking', True) is not False
     if data.get('chat_id'):
         chat = get_object_or_404(Chat, id=data['chat_id'], user=request.user)
     else:
@@ -162,7 +164,7 @@ def agent_send(request):
     cache.delete(_stop_key(chat.id))
     agent.copy_to_workspace(chat.id, msg)     # so run_python / read_file can open them
     vision_model = data.get('vision_model', '').strip()
-    run = AgentRun.objects.create(chat=chat, model=model, msgs=[])
+    run = AgentRun.objects.create(chat=chat, model=model, thinking_enabled=thinking, msgs=[])
     def gen():
         if upload_errors:
             yield 'token', '> △ ' + '; '.join(upload_errors) + '\n\n'

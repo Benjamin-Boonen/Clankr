@@ -1293,6 +1293,11 @@
             <span class="ag-sw" aria-hidden="true"></span>
             <span class="ag-txt">Agent</span>
           </label>
+          <label class="agent-toggle thinking-toggle" title="Thinking mode: allow supported reasoning models to use their thinking mode">
+            <input type="checkbox" id="thinkingMode" checked>
+            <span class="ag-sw" aria-hidden="true"></span>
+            <span class="ag-txt">Thinking</span>
+          </label>
         </div>
         <div class="topbar-actions">
           <button class="icon-btn" title="Artifacts" onclick="openArtifacts()">
@@ -1922,7 +1927,7 @@
       const abort = new AbortController();
       activeCtx = ctx; activeAbort = abort;
       const agent = document.getElementById('agentMode').checked;
-      const fields = {content: text, model: modelSel.value, chat_id: currentChatId, vision_model: visionSel.value};
+      const fields = {content: text, model: modelSel.value, chat_id: currentChatId, vision_model: visionSel.value, thinking: document.getElementById('thinkingMode').checked};
       let resp;
       try {
       if (files.length) {
