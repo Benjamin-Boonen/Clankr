@@ -20,6 +20,8 @@ Pyggie's agent and ordinary chat streams could treat an Ollama generation-limit 
 - Keep tool rounds bounded by the existing `MAX_ROUNDS`; continuation attempts do not consume that tool-round budget.
 
 ## Validation
+The first local test run reported 29 passing tests and one failure in `Wiring.test_plain_chat_stream_draws_plot`. The failure exposed a transcript-ordering issue: the completed assistant answer was appended to the in-memory message list after the request, and the test's captured request payload shared that mutable list. The completed-answer append was removed; a partial assistant message is added to the transcript only when a continuation is actually required. Please rerun the suite to verify this regression fix.
+
 Run from `pyggie/`:
 
 ```bash
