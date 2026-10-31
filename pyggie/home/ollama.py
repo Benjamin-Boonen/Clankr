@@ -251,6 +251,7 @@ def chat_stream(model, messages, chat_id=None):
     """Yields (kind, value):
          ("thinking", text)             reasoning tokens
          ("tool", {"name", "arg"})      a tool is being run
+         ("result", {"name", "out"})    that tool finished (the page needs this to close its notice)
          ("artifact", {id,title,kind})  a plot tool stored a graph in chat `chat_id`
          ("token", text)                the answer
          ("status", text)               progress note for the status line (e.g. loading the model)
@@ -303,10 +304,13 @@ def chat_stream(model, messages, chat_id=None):
             args = parse_args(fn.get("arguments"))
             label = next(iter(args.values()), "") if args else ""
             yield "tool", {"name": fn["name"], "arg": label}
+            art = None
             if plots.is_plot_tool(fn["name"]):
                 out, art = plots.run_for_chat(fn["name"], args, chat_id)
-                if art:
-                    yield "artifact", art
             else:
                 out = run_tool(fn["name"], args)
             msgs.append({"role": "tool", "tool_name": fn["name"], "content": out})
+            # same events, same order as agent mode: the page closes the tool notice on "result"
+            yield "result", {"name": fn["name"], "out": out[:1500]}
+            if art:
+                yield "artifact", art
