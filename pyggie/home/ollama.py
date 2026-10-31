@@ -261,12 +261,13 @@ def chat_stream(model, messages, chat_id=None):
         yield "status", load_notice(model)
 
     continuation_count = 0
+    disable_thinking = False
     round_no = 0
     while round_no < MAX_ROUNDS:
         payload = {"model": model, "messages": msgs, "stream": True,
                    "options": {"temperature": 0.2, "num_predict": 4096}}
         if "thinking" in caps:
-            payload["think"] = True
+            payload["think"] = not disable_thinking
         # Continuation calls never get tools: they should finish the current
         # answer, not restart research or perform additional side effects.
         if "tools" in caps and round_no < MAX_ROUNDS - 1 and continuation_count == 0:
@@ -313,6 +314,19 @@ def chat_stream(model, messages, chat_id=None):
                 if art:
                     yield "artifact", art
             round_no += 1
+            continue
+
+        # Some reasoning models can spend the whole generation budget on
+        # hidden thinking and return no visible answer. Retry once with thinking
+        # disabled so the same output budget is available for user-facing text.
+        if (not text.strip() and finish_reason in ("length", "max_tokens")
+                and "thinking" in caps and not disable_thinking
+                and continuation_count < 2):
+            continuation_count += 1
+            disable_thinking = True
+            msgs.append({"role": "user", "content":
+                "Give the user-facing answer directly. Do not provide hidden reasoning, a plan, or tool calls. "
+                "Answer the original request using the conversation and available evidence."})
             continue
 
         # No tool calls: this is the user-facing answer. Ollama's final chunk
