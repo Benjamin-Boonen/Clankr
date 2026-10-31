@@ -334,3 +334,21 @@ class Wiring(TestCase):
         sent = post.call_args.kwargs["json"]
         self.assertNotIn("tools", sent)
         self.assertNotIn("plot_2d", sent["messages"][0]["content"])
+
+
+class ModelCapabilityFailureTests(SimpleTestCase):
+    @mock.patch("home.ollama.get_caps", side_effect=RuntimeError(
+        'Ollama 500: unsupported tensor "output.weight" size overflows'))
+    @mock.patch("home.ollama.requests.get")
+    def test_broken_model_does_not_break_model_listing(self, get, get_caps):
+        get.return_value.ok = True
+        get.return_value.json.return_value = {
+            "models": [{"name": "broken-model:latest"}]
+        }
+
+        models = ollama.get_models()
+
+        self.assertEqual(len(models), 1)
+        self.assertEqual(models[0]["name"], "broken-model:latest")
+        self.assertEqual(models[0]["caps"], [])
+        self.assertIn("size overflows", models[0]["caps_error"])
