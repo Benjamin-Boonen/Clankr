@@ -1679,7 +1679,8 @@
             currentChatId = null;
             msgs.innerHTML = '';
             setActive(null);
-            showEmptyState();
+            msgs.appendChild(empty);
+            empty.style.display = '';
           }
           if (!historyList.querySelector('.history-item')) {
             const empty = document.createElement('div');
