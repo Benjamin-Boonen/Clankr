@@ -1245,7 +1245,7 @@
         {% for chat in chats %}
         <div class="history-item" data-id="{{ chat.id }}">
           <span class="history-title">{{ chat.title|default:"Untitled" }}</span>
-          <button class="history-menu-btn" type="button" aria-label="Conversation options" title="Conversation options">⋯</button>
+          <button class="history-menu-btn" type="button" aria-label="Delete conversation" title="Delete conversation"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
         </div>
         {% empty %}
         <div class="history-empty">No conversations yet</div>
@@ -1643,9 +1643,9 @@
       const menu = document.createElement('button');
       menu.className = 'history-menu-btn';
       menu.type = 'button';
-      menu.title = 'Conversation options';
-      menu.setAttribute('aria-label', 'Conversation options');
-      menu.textContent = '⋯';
+      menu.title = 'Delete conversation';
+      menu.setAttribute('aria-label', 'Delete conversation');
+      menu.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>';
       el.append(label, menu);
       historyList.prepend(el);
     }
