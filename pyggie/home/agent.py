@@ -5,14 +5,14 @@ import json, os, re, shutil, subprocess, datetime
 from pathlib import Path
 from django.conf import settings
 import requests
-from . import ollama, plots
+from . import ollama, plots, context
 from .models import Artifact
 
 MAX_STEPS = 15            # hard cap on model calls per run
 REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill", *plots.NAMES}   # plots: an identical repeat is not drawn twice
 OUT_CHARS = 6000
-CONTEXT_CHARS = 36000
-RECENT_MESSAGES = 10
+CONTEXT_CHARS = context.DEFAULT_HISTORY_CHARS
+RECENT_MESSAGES = context.RECENT_MESSAGES
 SKILL_DIR = Path(__file__).parent / "skills"
 HAS_BWRAP = shutil.which("bwrap") is not None
 
@@ -77,24 +77,9 @@ def _research_limit_reached(run, name):
 
 
 def _compact_messages(messages):
-    """Clip older transcript prose/results while preserving message and tool ordering."""
-    total = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
-    if total <= CONTEXT_CHARS:
-        return messages
-    cutoff = max(0, len(messages) - RECENT_MESSAGES)
-    compacted = []
-    for index, message in enumerate(messages):
-        if index >= cutoff:
-            compacted.append(message)
-            continue
-        item = dict(message)
-        content = item.get("content")
-        if isinstance(content, str):
-            limit = 900 if item.get("role") == "tool" else 1800
-            if len(content) > limit:
-                item["content"] = content[:limit] + "\n…[older context compacted]"
-        compacted.append(item)
-    return compacted
+    """Compatibility wrapper around the shared prompt-history compactor."""
+    return context.compact_messages(messages, budget_chars=CONTEXT_CHARS,
+                                    recent=RECENT_MESSAGES)
 
 
 # Preamble for run_python when no OS sandbox (bwrap) is available: Python-level
@@ -209,6 +194,10 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
         yield "status", ollama.load_notice(model)
     system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
              f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
+    pressure = context.context_pressure(run.msgs)
+    if pressure["suggest_new_chat"]:
+        yield "status", ("This conversation is very long. Its full history is saved, but "
+                         "starting a new chat with a handoff summary may improve reliability.")
     payload = {"model": model, "stream": True,
                "options": {"temperature": 0.2, "num_predict": 4096},
                "messages": [{"role": "system", "content": system}] + _compact_messages(run.msgs)}
