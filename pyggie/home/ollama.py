@@ -247,7 +247,7 @@ def run_tool(name, args):
         return f"Tool error: {e}"
 
 
-def chat_stream(model, messages, chat_id=None):
+def chat_stream(model, messages, chat_id=None, thinking=True):
     """Stream a chat answer, recovering from Ollama generation-limit stops.
 
     Continuations are text-only and bounded: tool rounds remain governed by
@@ -265,7 +265,7 @@ def chat_stream(model, messages, chat_id=None):
         yield "status", load_notice(model)
 
     continuation_count = 0
-    disable_thinking = False
+    disable_thinking = not thinking
     round_no = 0
     while round_no < MAX_ROUNDS:
         payload = {"model": model, "messages": msgs, "stream": True,
