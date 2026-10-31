@@ -330,20 +330,20 @@ _SYNTAX = ("Formulas: use * for every multiplication (2*x, not 2x), ^ or ** for 
 
 TOOLS = [
     _tool("plot_2d", "Draw an interactive 2D graph of one or more functions y = f(x) and show it to the user. "
-          "Use it whenever a picture of a function helps (never draw graphs as text). " + _SYNTAX +
+          "Use ONLY when the user explicitly asks for a graph/plot, or when a visual is essential to explain a relationship that prose and equations cannot communicate clearly. " + _SYNTAX +
           "Optional y_min and y_max (both) crop the vertical range, useful for tan or 1/x.",
           {"exprs": {"type": "array", "items": _S, "description": 'formulas in x, e.g. ["sin(x)", "x^2/10"] (max 6)'},
            "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
            "title": _S, "x_label": _S, "y_label": _S},
           ["exprs", "x_min", "x_max"]),
-    _tool("plot_3d", "Draw an interactive 3D surface (or a 2D contour map) of z = f(x, y) and show it to the user. " + _SYNTAX,
+    _tool("plot_3d", "Draw an interactive 3D surface (or a 2D contour map) of z = f(x, y) and show it to the user. Use ONLY when explicitly requested or when the spatial shape is essential to the explanation; do not create one merely because an equation has multiple variables. " + _SYNTAX,
           {"expr": {"type": "string", "description": "formula in x and y, e.g. sin(x)*cos(y)"},
            "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
            "style": {"type": "string", "enum": ["surface", "contour"], "description": "surface (default, 3D) or contour (2D map)"},
            "title": _S, "x_label": _S, "y_label": _S, "z_label": _S},
           ["expr", "x_min", "x_max", "y_min", "y_max"]),
     _tool("plot_curve", "Draw a parametric curve (x(t), y(t)) in 2D, or (x(t), y(t), z(t)) in 3D if z is given: "
-          "trajectories, orbits, Lissajous figures, helices. Shown to the user. " + _SYNTAX.replace("variables", "t"),
+          "trajectories, orbits, Lissajous figures, helices. Use ONLY when explicitly requested or when the path/shape itself is essential to the task; do not plot a formula simply because it contains a parameter. " + _SYNTAX.replace("variables", "t"),
           {"x": {"type": "string", "description": "x(t), e.g. cos(t)"},
            "y": {"type": "string", "description": "y(t), e.g. sin(t)"},
            "z": {"type": "string", "description": "optional z(t), e.g. t/5 (makes the curve 3D)"},
@@ -352,11 +352,17 @@ TOOLS = [
 ]
 
 PLOT_PROMPT = (
-    "\nYou can also draw graphs: plot_2d (functions of x), plot_3d (surfaces z=f(x,y) or contour maps) and "
-    "plot_curve (parametric curves, 2D or 3D). The graph appears in the chat, interactive. "
-    "Call one whenever a picture of a function, surface or trajectory helps the user understand; never draw graphs "
-    "with text characters. You cannot see the graph: use the summary the tool returns to describe it, "
-    "and do not call the same plot twice."
+    "\nGraphing is optional, not the default. Prefer a direct explanation in prose and equations. "
+    "Create a graph ONLY if the user explicitly asks for a plot/graph/visualization, or if the visual "
+    "itself is essential to understanding something that cannot be communicated clearly with prose, "
+    "equations, or a small table. Before plotting, ask: what specific insight will this image add? "
+    "If you cannot name a concrete insight, do not plot. Never make duplicate or near-duplicate plots, "
+    "and never plot the exact solution and a numerical approximation side-by-side unless the user asks "
+    "for a visual comparison or the comparison is central to the question. A request to solve, derive, "
+    "calculate, apply a method, or explain an equation is NOT by itself a request for a graph. "
+    "When unsure, answer without a graph. If the user explicitly requests a graph, create only the "
+    "minimum number of plots needed. The graph appears in chat and is interactive. "
+    "You cannot see it: use the tool summary to describe it."
 )
 
 
