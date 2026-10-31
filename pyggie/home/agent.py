@@ -202,7 +202,7 @@ def execute(name, args, run):
     except Exception as e:
         return f"Tool error: {e}"
 
-def _model_round(model, run, allow_tools=True):
+def _model_round(model, run, allow_tools=True, allow_thinking=True):
     """One streamed model call. Yields events; returns (text, tool_calls) via run.last."""
     caps = ollama.get_caps(model)
     if not ollama.is_loaded(model):
@@ -212,7 +212,7 @@ def _model_round(model, run, allow_tools=True):
     payload = {"model": model, "stream": True,
                "options": {"temperature": 0.2, "num_predict": 4096},
                "messages": [{"role": "system", "content": system}] + _compact_messages(run.msgs)}
-    if "thinking" in caps: payload["think"] = True
+    if "thinking" in caps: payload["think"] = allow_thinking
     if allow_tools and "tools" in caps: payload["tools"] = TOOLS
     resp = requests.post(f"{ollama.OLLAMA_BASE}/api/chat", json=payload,
                          stream=True, timeout=(15, 180))
@@ -333,7 +333,7 @@ def drive(run, model):
                     "If the request is ambiguous, ask one concise clarifying question. "
                     "Do not narrate your reasoning or your plan."})
                 try:
-                    yield from _model_round(model, run, allow_tools=False)
+                    yield from _model_round(model, run, allow_tools=False, allow_thinking=False)
                     recovery, _ = run.last
                 except Exception as exc:
                     yield "error", ollama.friendly_error(exc)
