@@ -195,7 +195,8 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
     system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
              f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
     pressure = context.context_pressure(run.msgs)
-    if pressure["suggest_new_chat"]:
+    if pressure["suggest_new_chat"] and not getattr(run, "context_notice_sent", False):
+        run.context_notice_sent = True
         yield "status", ("This conversation is very long. Its full history is saved, but "
                          "starting a new chat with a handoff summary may improve reliability.")
     payload = {"model": model, "stream": True,
