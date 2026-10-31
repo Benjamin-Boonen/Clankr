@@ -30,9 +30,13 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertEqual(len(compacted), len(messages))
         self.assertEqual(compacted[-1], messages[-1])
         self.assertEqual(compacted[-2], messages[-2])
-        self.assertIn("older context compacted", compacted[0]["content"])
+        # The original user objective is intentionally preserved verbatim.
+        # Older tool output is the content that should be compacted instead.
+        self.assertEqual(compacted[0], messages[0])
         self.assertEqual(compacted[1]["role"], "tool")
         self.assertEqual(compacted[1]["tool_name"], "web_search")
+        self.assertIn("older context compacted", compacted[1]["content"])
+        self.assertLess(len(compacted[1]["content"]), len(messages[1]["content"]))
 
     def test_repeat_guard_detects_same_read_only_call(self):
         class Run:

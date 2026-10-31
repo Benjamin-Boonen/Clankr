@@ -25,6 +25,7 @@ class Message(models.Model):
 class AgentRun(models.Model):
     chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name='runs')
     model = models.CharField(max_length=100)
+    thinking_enabled = models.BooleanField(default=True)
     msgs = models.JSONField(default=list)       # full transcript incl. tool calls/results
     pending = models.JSONField(default=list)    # tool calls waiting for approval
     allowed = models.JSONField(default=list)    # tools the user said "always allow" for this run
