@@ -2488,6 +2488,13 @@
           scrollToBottom(false);   // only follows if you're already near the bottom
         }
       }
+      // The stream is over, so no tool can still be running. Never leave "running…" behind if a
+      // "result" event was missing (unless the run is paused for approval: it resumes this notice).
+      if (ctx.liveTool && !ctx.waiting) {
+        noticeStatus(ctx.liveTool, ctx.errored ? 'stopped' : 'done', ctx.errored);
+        ctx.liveTool.open = false;
+        ctx.liveTool = null;
+      }
     }
 
     function addEmptyAiBubble() {

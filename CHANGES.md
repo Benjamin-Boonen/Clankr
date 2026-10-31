@@ -1,5 +1,16 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Fix: tool notice stuck on "running…" in plain chat (Claude, 2026-10-31)** — after a plot (or a web search) the answer
+> and graph showed but the tool notice kept saying `running…`. Cause: `ollama.chat_stream` (plain chat) sent the `tool` event
+> but never `result`; the page closes a notice only on `result` (agent mode always sent it). Reproduced in headless
+> Chromium against a fake Ollama (plain: `plot_2d -> running…` with status "Done"; agent: fine).
+> - `ollama.chat_stream` now yields `result {name, out[:1500]}` after every tool, then `artifact`: same order as agent mode.
+> - Page safety net: when a stream ends, `consume()` closes any notice still open (unless the run waits for approval),
+>   so a missing `result` can never leave `running…` behind again.
+> - Added `static/icons/plot_2d.svg`, `plot_3d.svg`, `plot_curve.svg` (they were 404s; the inline fallback hid it).
+>   The `artifact*.svg` 404s were already there and are untouched.
+> - Tests: 30 total. New: every plain-chat tool gets a `result`; mutation-checked (removing the yield fails 2 tests).
+
 > **Graph tools (Claude, 2026-10-30)** — the model can draw interactive 2D/3D graphs. New file `pyggie/home/plots.py`.
 > - Tools (plain chat AND agent mode): `plot_2d(exprs, x_min, x_max[, y_min, y_max, title, x_label, y_label])`
 >   curves y=f(x); `plot_3d(expr, x_min, x_max, y_min, y_max[, style=surface|contour, ...])` z=f(x,y);

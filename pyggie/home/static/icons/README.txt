@@ -6,7 +6,7 @@ Tools (shown on each tool call):
   web_search.svg    fetch_page.svg    run_python.svg    run_shell.svg
   write_file.svg    read_file.svg     create_artifact.svg  load_skill.svg
   finish.svg
-  plot_2d.svg    plot_3d.svg    plot_curve.svg   (graph tools; inline fallbacks exist)
+  plot_2d.svg    plot_3d.svg    plot_curve.svg   (graph tools)
 Artifacts (Artifacts panel):
   artifact-html.svg    artifact-svg.svg    artifact-markdown.svg
   artifact.svg         (any other kind)

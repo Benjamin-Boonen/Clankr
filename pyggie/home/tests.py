@@ -293,12 +293,34 @@ class Wiring(TestCase):
              mock.patch.object(ollama, "is_loaded", return_value=True), \
              mock.patch.object(ollama.requests, "post", side_effect=responses) as post:
             events = list(ollama.chat_stream("m", [{"role": "user", "content": "plot sin"}], chat_id=self.chat.id))
-        self.assertEqual([k for k, _ in events], ["tool", "artifact", "token"])
+        # tool -> result (closes the notice in the page) -> artifact -> answer, the same order as agent mode
+        self.assertEqual([k for k, _ in events], ["tool", "result", "artifact", "token"])
+        self.assertEqual(events[1][1]["name"], "plot_2d")
+        self.assertIn("Plotted", events[1][1]["out"])
         first, second = (c.kwargs["json"] for c in post.call_args_list)
         self.assertIn("plot_3d", [t["function"]["name"] for t in first["tools"]])
         self.assertIn("plot_2d", first["messages"][0]["content"])            # system prompt mentions the tools
         self.assertIn("Plotted", second["messages"][-1]["content"])          # the model gets a summary back
         self.assertEqual(Artifact.objects.filter(chat=self.chat, kind="plot").count(), 1)
+
+    def test_plain_chat_closes_every_tool_with_a_result(self):
+        """Regression: plain chat sent "tool" but never "result", so the page left the notice on "running…"."""
+        class Resp:
+            ok = True
+            def __init__(self, *chunks): self.chunks = chunks
+            def iter_lines(self): return (json.dumps(c).encode() for c in self.chunks)
+            def close(self): pass
+        search = {"function": {"name": "web_search", "arguments": {"query": "rc circuit"}}}
+        responses = [Resp({"message": {"tool_calls": [search]}, "done": True}),
+                     Resp({"message": {"content": "ok"}, "done": True})]
+        with mock.patch.object(ollama, "get_caps", return_value=("completion", "tools")), \
+             mock.patch.object(ollama, "is_loaded", return_value=True), \
+             mock.patch.object(ollama, "run_tool", return_value="[]" + "x" * 3000), \
+             mock.patch.object(ollama.requests, "post", side_effect=responses):
+            events = list(ollama.chat_stream("m", [{"role": "user", "content": "q"}], chat_id=self.chat.id))
+        self.assertEqual([k for k, _ in events], ["tool", "result", "token"])
+        self.assertEqual(events[1][1]["name"], "web_search")
+        self.assertLessEqual(len(events[1][1]["out"]), 1500)             # clipped like agent mode
 
     def test_no_plot_prompt_without_tool_support(self):
         class Resp:
