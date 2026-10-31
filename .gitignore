@@ -1,0 +1,30 @@
+# Python bytecode (regenerated on every run)
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local Django state. NOT source code: the database holds users, password hashes,
+# sessions and every chat. Each machine creates its own with `python manage.py migrate`.
+*.sqlite3
+*.sqlite3-journal
+
+# Files the agent creates while it works (one folder per chat)
+pyggie/agent_workspaces/
+
+# Secrets and local settings
+.env
+.env.*
+
+# Logs, collected static files
+*.log
+staticfiles/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
