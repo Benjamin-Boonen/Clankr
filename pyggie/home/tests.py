@@ -340,6 +340,38 @@ class Wiring(TestCase):
         self.assertNotIn("plot_2d", sent["messages"][0]["content"])
 
 
+    def test_script_execution_always_requires_approval(self):
+        self.assertTrue(agent.needs_approval("run_python", {"code": "print(1)"}))
+        self.assertTrue(agent.needs_approval("run_shell", {"command": "echo hi"}))
+        run = SimpleNamespace(msgs=[], allowed=["run_python", "run_shell"], pending=[], chat_id=self.chat.id,
+                              new_artifacts=[], id=1)
+        calls = [{"function": {"name": "run_python", "arguments": {"code": "print(1)"}}}]
+        events = list(agent._process(run, calls))
+        self.assertEqual([kind for kind, _ in events], ["approval"])
+        self.assertEqual(run.pending, calls)
+
+    def test_script_artifact_kinds_are_supported(self):
+        for kind in ("python", "shell"):
+            with self.subTest(kind=kind):
+                artifact = Artifact.objects.create(chat=self.chat, title="example", kind=kind,
+                                                   content="echo hello" if kind == "shell" else "print('hello')")
+                self.assertEqual(artifact.kind, kind)
+
+    def test_delete_chat_is_owner_scoped_and_cascades(self):
+        _, art = plots.run_for_chat("plot_2d", {"exprs": ["x"], "x_min": 0, "x_max": 1}, self.chat.id)
+        self.client.force_login(self.user)
+        response = self.client.post(f"/chat/{self.chat.id}/delete/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Chat.objects.filter(id=self.chat.id).exists())
+        self.assertFalse(Artifact.objects.filter(id=art["id"]).exists())
+
+    def test_cannot_delete_another_users_chat(self):
+        other = User.objects.create_user("other", password="pw")
+        chat = Chat.objects.create(user=other, title="private")
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.post(f"/chat/{chat.id}/delete/").status_code, 404)
+
+
 class ModelCapabilityFailureTests(SimpleTestCase):
     @mock.patch("home.ollama.get_caps", side_effect=RuntimeError(
         'Ollama 500: unsupported tensor "output.weight" size overflows'))
