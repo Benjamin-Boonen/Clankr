@@ -169,21 +169,40 @@
     }
 
     .history-item {
-      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 5px 3px 10px;
       border-radius: 7px;
       font-size: 13px;
       color: var(--muted);
-      cursor: pointer;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       transition: background 0.1s, color 0.1s;
     }
-
-    .history-item:hover {
-      background: var(--surface2);
-      color: var(--text);
+    .history-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      padding: 5px 0;
     }
+    .history-menu-btn {
+      flex: 0 0 26px;
+      width: 26px;
+      height: 26px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      opacity: .65;
+    }
+    .history-item:hover, .history-item.active {background: var(--user-bg); color: var(--text)}
+    .history-item:hover .history-menu-btn {opacity: 1}
+    .history-menu-btn:hover {background: var(--surface2); color: var(--text)}
 
     .history-item.active {
       background: var(--user-bg);
@@ -1224,7 +1243,10 @@
       <div class="history-label">Recent</div>
       <div class="history-list" id="historyList">
         {% for chat in chats %}
-        <div class="history-item" data-id="{{ chat.id }}">{{ chat.title|default:"Untitled" }}</div>
+        <div class="history-item" data-id="{{ chat.id }}">
+          <span class="history-title">{{ chat.title|default:"Untitled" }}</span>
+          <button class="history-menu-btn" type="button" aria-label="Delete conversation" title="Delete conversation"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></button>
+        </div>
         {% empty %}
         <div class="history-empty">No conversations yet</div>
         {% endfor %}
@@ -1615,7 +1637,16 @@
       const el = document.createElement('div');
       el.className = 'history-item';
       el.dataset.id = id;
-      el.textContent = title || 'Untitled';
+      const label = document.createElement('span');
+      label.className = 'history-title';
+      label.textContent = title || 'Untitled';
+      const menu = document.createElement('button');
+      menu.className = 'history-menu-btn';
+      menu.type = 'button';
+      menu.title = 'Delete conversation';
+      menu.setAttribute('aria-label', 'Delete conversation');
+      menu.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>';
+      el.append(label, menu);
       historyList.prepend(el);
     }
 
@@ -1632,9 +1663,37 @@
 
     try { setSidebar(localStorage.getItem('clankr.sidebarCollapsed') === '1'); } catch (e) {}
 
-    historyList.addEventListener('click', e => {
+    historyList.addEventListener('click', async e => {
       const item = e.target.closest('.history-item');
-      if (item) loadChat(item.dataset.id);
+      if (!item) return;
+      if (e.target.closest('.history-menu-btn')) {
+        e.stopPropagation();
+        const title = item.querySelector('.history-title')?.textContent || 'this conversation';
+        if (!confirm(`Delete "${title}"?\\n\\nThis cannot be undone. All messages, attachments and artifacts in this conversation will be permanently deleted.`)) return;
+        const id = item.dataset.id;
+        try {
+          const r = await postJSON(`/chat/${id}/delete/`, {});
+          if (!r.ok) throw new Error(`Server error ${r.status}`);
+          item.remove();
+          if (String(currentChatId) === String(id)) {
+            currentChatId = null;
+            msgs.innerHTML = '';
+            setActive(null);
+            msgs.appendChild(empty);
+            empty.style.display = '';
+          }
+          if (!historyList.querySelector('.history-item')) {
+            const empty = document.createElement('div');
+            empty.className = 'history-empty';
+            empty.textContent = 'No conversations yet';
+            historyList.append(empty);
+          }
+        } catch (err) {
+          alert('Could not delete conversation: ' + err.message);
+        }
+        return;
+      }
+      if (e.target.closest('.history-title')) loadChat(item.dataset.id);
     });
 
     async function loadChat(id) {
@@ -2031,7 +2090,10 @@
         }
         setBusy(false);
       };
-      for (const [label, ap, al] of [['Allow', true, false], ['Always allow this tool', true, true], ['Deny', false, false]]) {
+      const choices = (ev.name === 'run_python' || ev.name === 'run_shell')
+        ? [['Approve once', true, false], ['Deny', false, false]]
+        : [['Allow', true, false], ['Always allow this tool', true, true], ['Deny', false, false]];
+      for (const [label, ap, al] of choices) {
         const b = document.createElement('button'); b.textContent = label;
         b.onclick = () => decide(ap, al); card.append(b);
       }

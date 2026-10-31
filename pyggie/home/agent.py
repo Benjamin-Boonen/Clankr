@@ -23,12 +23,12 @@ S = {"type": "string"}
 
 TOOLS = [
     ollama.TOOLS[0], ollama.TOOLS[1],
-    _fn("run_python", "Run Python 3 code in the sandbox. NO NETWORK ACCESS (web/API calls fail); workspace dir only. Print results.", {"code": S}, ["code"]),
-    _fn("run_shell", "Run a shell command on the host. ALWAYS needs user approval.", {"command": S}, ["command"]),
+    _fn("run_python", "Execute Python 3 code in the isolated chat workspace. NO NETWORK ACCESS. Requires explicit user approval for every execution.", {"code": S}, ["code"]),
+    _fn("run_shell", "Execute a shell command from the chat workspace. ALWAYS requires explicit user approval for every execution.", {"command": S}, ["command"]),
     _fn("write_file", "Write a text file in the workspace.", {"path": S, "content": S}, ["path", "content"]),
     _fn("read_file", "Read a text file from the workspace.", {"path": S}, ["path"]),
-    _fn("create_artifact", "Show the user a finished piece of work: a self-contained web page, SVG or Markdown document.",
-        {"title": S, "kind": {"type": "string", "enum": ["html", "svg", "markdown"]}, "content": S}, ["title", "kind", "content"]),
+    _fn("create_artifact", "Show the user a finished piece of work: a self-contained web page, SVG, Markdown document, Python script or shell script.",
+        {"title": S, "kind": {"type": "string", "enum": ["html", "svg", "markdown", "python", "shell"]}, "content": S}, ["title", "kind", "content"]),
     _fn("load_skill", "Load detailed instructions for a skill. Available: " + ", ".join(
         sorted(p.name for p in SKILL_DIR.iterdir() if p.is_dir())) if SKILL_DIR.exists() else "load_skill",
         {"name": S}, ["name"]),
@@ -43,8 +43,10 @@ AGENT_PROMPT = (
     "the call will supply. After a result, incorporate it into the existing solution instead of restarting. "
     "Do not repeat an identical tool call. If a result is unavailable, contradictory, or enough to answer, stop "
     "research and finish with the evidence you have; never search in a loop. Prefer run_python for computation. "
-    "Use create_artifact only for a deliverable the user asked to keep (load the matching skill first); otherwise "
-    "answer in text. User attachments are in the workspace. run_python has NO network access; use web_search or "
+    "Use create_artifact for deliverables the user should keep, including Python scripts (kind=python) and shell scripts (kind=shell); "
+    "use write_file when a script needs to be part of a multi-file workspace. User attachments are in the workspace. "
+    "Never execute Python or shell code without the explicit approval prompt; creating/writing a script is not permission to run it. "
+    "run_python has NO network access; use web_search or "
     "fetch_page for network research. Some tools require approval; if denied, adapt without retrying that action. "
     "When done, call finish(summary) with a concise, truthful report. Never write tool calls as text."
     + plots.PLOT_PROMPT +
@@ -125,11 +127,9 @@ def needs_approval(name, args):
     """Sandboxed / read-only / workspace-only actions are free; anything touching the host asks.
     run_python without bwrap runs only Python-level network blocking (best-effort),
     so it still asks the user first in that case."""
-    if name == "run_shell":
-        return True
-    if name == "run_python":
-        return not HAS_BWRAP          # no OS sandbox → ask
-    return False
+    # Execution is always an explicit, per-invocation user decision, even when
+    # bubblewrap is installed. "Always allow" must never bypass script execution.
+    return name in {"run_shell", "run_python"}
 
 def _clip(s):
     s = s or ""
@@ -235,7 +235,7 @@ def _process(run, calls):
         call = calls[0]; fn = call["function"]
         args = ollama.parse_args(fn.get("arguments"))
         name = fn["name"]
-        if needs_approval(name, args) and name not in run.allowed:
+        if needs_approval(name, args) and (name in {"run_shell", "run_python"} or name not in run.allowed):
             run.pending = calls
             yield "approval", {"run_id": run.id, "name": name, "args": args}
             return
@@ -364,7 +364,8 @@ def resume(run, approve, always=False):
     args = ollama.parse_args(fn.get("arguments"))
     run.new_artifacts = []
     if approve:
-        if always: run.allowed = list(set(run.allowed) | {name})
+        if always and name not in {"run_shell", "run_python"}:
+            run.allowed = list(set(run.allowed) | {name})
         # same truthful "tool" event as _process(): fired only once execution
         # is actually about to run (approval already granted above).
         yield "tool", {"name": name, "arg": next(iter(args.values()), "") if args else ""}
