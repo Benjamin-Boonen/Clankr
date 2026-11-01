@@ -9,7 +9,7 @@ from . import ollama, plots, context
 from .models import Artifact
 
 MAX_STEPS = 15            # hard cap on model calls per run
-REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill", *plots.NAMES}   # plots: an identical repeat is not drawn twice
+REPEAT_SAFE = {"web_search", "fetch_page", "read_file", "load_skill", "run_python", "run_shell", *plots.NAMES}   # plots: an identical repeat is not drawn twice
 OUT_CHARS = 6000
 CONTEXT_CHARS = context.DEFAULT_HISTORY_CHARS
 RECENT_MESSAGES = context.RECENT_MESSAGES
@@ -39,9 +39,11 @@ TOOLS = [
 AGENT_PROMPT = (
     "\nYou are in AGENT MODE. Preserve the user's original objective across every tool call. "
     "Use tools only when they materially help; do not search by default for maths, reasoning, or content already "
-    "provided by the user. Before each tool call, consider what is already known and what specific missing fact "
-    "the call will supply. After a result, incorporate it into the existing solution instead of restarting. "
-    "Do not repeat an identical tool call. If a result is unavailable, contradictory, or enough to answer, stop "
+    "provided by the user. Treat the full run transcript as authoritative memory of what you have already said, "
+    "searched, computed, executed, plotted, and written. Never restart or repeat completed work. Before every "
+    "tool call, compare it with prior calls and results; do not repeat the same or equivalent computation, script, "
+    "file write, plot, search, or explanation when the result is already available. Retry only after a concrete "
+    "failure and with a materially changed approach. If a result is unavailable, contradictory, or enough to answer, stop "
     "research and finish with the evidence you have; never search in a loop. Prefer run_python for computation. "
     "Use create_artifact for deliverables the user should keep, including Python scripts (kind=python) and shell scripts (kind=shell); "
     "use write_file when a script needs to be part of a multi-file workspace. User attachments are in the workspace. "
@@ -124,11 +126,7 @@ def _safe(ws, rel):
     return p
 
 def needs_approval(name, args):
-    """Sandboxed / read-only / workspace-only actions are free; anything touching the host asks.
-    run_python without bwrap runs only Python-level network blocking (best-effort),
-    so it still asks the user first in that case."""
-    # Execution is always an explicit, per-invocation user decision, even when
-    # bubblewrap is installed. "Always allow" must never bypass script execution.
+    """Script execution requires approval once per AgentRun; other tools follow run.allowed."""
     return name in {"run_shell", "run_python"}
 
 def _clip(s):
@@ -235,15 +233,17 @@ def _process(run, calls):
         call = calls[0]; fn = call["function"]
         args = ollama.parse_args(fn.get("arguments"))
         name = fn["name"]
-        if needs_approval(name, args) and (name in {"run_shell", "run_python"} or name not in run.allowed):
-            run.pending = calls
-            yield "approval", {"run_id": run.id, "name": name, "args": args}
-            return
         calls.pop(0)
         label = next(iter(args.values()), "") if args else ""
+        # Block duplicate calls before approval so they cannot trigger another prompt.
         if _is_repeat(run, name, args):
-            out = ("This exact read-only call already ran and its result is in the transcript. "
-                   "Do not repeat it; answer from the evidence already collected.")
+            out = ("This exact tool call already appeared in this run and was not executed again. "
+                   "Use the prior result and continue the original task. Retry only after a concrete "
+                   "failure and with a materially changed approach.")
+        elif needs_approval(name, args) and name not in run.allowed:
+            run.pending = [call] + calls
+            yield "approval", {"run_id": run.id, "name": name, "args": args}
+            return
         elif _research_limit_reached(run, name):
             prior = sum(1 for message in run.msgs
                         if message.get("role") == "tool" and message.get("tool_name") == name)
@@ -364,7 +364,8 @@ def resume(run, approve, always=False):
     args = ollama.parse_args(fn.get("arguments"))
     run.new_artifacts = []
     if approve:
-        if always and name not in {"run_shell", "run_python"}:
+        # Script approval lasts for this AgentRun only, not future runs.
+        if name in {"run_shell", "run_python"} or always:
             run.allowed = list(set(run.allowed) | {name})
         # same truthful "tool" event as _process(): fired only once execution
         # is actually about to run (approval already granted above).
