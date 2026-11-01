@@ -353,15 +353,24 @@ class Wiring(TestCase):
         self.assertNotIn("plot_2d", sent["messages"][0]["content"])
 
 
-    def test_script_execution_always_requires_approval(self):
+    def test_script_execution_requires_approval_once_per_run(self):
         self.assertTrue(agent.needs_approval("run_python", {"code": "print(1)"}))
         self.assertTrue(agent.needs_approval("run_shell", {"command": "echo hi"}))
-        run = SimpleNamespace(msgs=[], allowed=["run_python", "run_shell"], pending=[], chat_id=self.chat.id,
+        run = SimpleNamespace(msgs=[], allowed=[], pending=[], chat_id=self.chat.id,
                               new_artifacts=[], id=1)
         calls = [{"function": {"name": "run_python", "arguments": {"code": "print(1)"}}}]
         events = list(agent._process(run, calls))
         self.assertEqual([kind for kind, _ in events], ["approval"])
         self.assertEqual(run.pending, calls)
+        run.allowed.append("run_python")
+        run.pending = []
+        run.msgs.append({"role": "assistant", "tool_calls": [{"function": {
+            "name": "run_python", "arguments": {"code": "print(1)"}}}]})
+        with mock.patch.object(agent, "execute", return_value="1") as execute:
+            events = list(agent._process(run, [{"function": {
+                "name": "run_python", "arguments": {"code": "print(2)"}}}]))
+        self.assertFalse(any(kind == "approval" for kind, _ in events))
+        execute.assert_called_once()
 
     def test_script_artifact_kinds_are_supported(self):
         for kind in ("python", "shell"):
