@@ -53,3 +53,12 @@ Then test with a local Ollama model that supports tool calls:
 - Avoid broad rewrites of `views.py`/the SSE frontend unless a reproducible issue requires them. Preserve the existing `token`, `tool`, `result`, `status`, `approval`, `artifact`, `error`, and `done` event contracts.
 - This branch is a proposed patch, not a verified production fix. Run tests and exercise it against the actual local models before merging.
 - Graph tools (`plot_2d`, `plot_3d`, `plot_curve`) live in `pyggie/home/plots.py`. `agent.execute()` dispatches them first (no workspace, no approval), they emit the existing `artifact` event, and they are in `REPEAT_SAFE`. See `CHANGES.md` ("Graph tools").
+
+
+## Run-scoped execution permission and repetition
+
+- Approval for `run_python` or `run_shell` lasts for the current AgentRun only, then expires. It is not a permanent account setting.
+- Exact duplicate tool calls, including script execution, are blocked before prompting for approval again.
+- The agent must use its transcript as the source of truth for completed speech, searches, calculations, plots, executions, and writes. Retry only after a concrete failure and with a materially changed approach.
+- Keep these rules in `pyggie/home/agent.py`; cover them in `pyggie/home/tests.py`.
+- Validate with `cd pyggie && python manage.py test home && python manage.py check`.
