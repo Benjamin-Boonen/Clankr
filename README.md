@@ -13,6 +13,7 @@ THIS PROJECT IS PARTLY VIBECODED, I DO NOT CLAIM FULL RESPONSIBILITY FOR THE EXE
 - **Professional SVG Icons**: Complete removal of emojis across the user interface, replaced with clean, scalable inline SVG logos and icons[cite: 1].
 - **Vision Model Support**: Automated detection of vision-capable models via template logic (`is_vision`), complete with dedicated badge and icon rendering in both selectors and headers[cite: 1].
 - **Interactive Graphs**: models with tool support can draw 2D curves, 3D surfaces/contours and parametric curves (`plot_2d`, `plot_3d`, `plot_curve`, see `pyggie/home/plots.py` and `CHANGES.md`). Rendered with Plotly.js; formulas are parsed safely, never `eval`'d.
+- **Mobile Layout**: phone-friendly UI (sidebar drawer, bottom-sheet modals, touch-sized controls, safe-area and keyboard aware). See `MOBILE_LAYOUT.md`.
 - **Multi-Agent Collaboration Ready**: Standardized component mapping and synchronized documentation notes designed to support multiple AI agents working concurrently on the repository[cite: 1].
 
 ---
@@ -72,3 +73,5 @@ To maintain synchronization across multiple working agents on this repository:
     Asset Consistency: Adhere to the strict policy of using inline SVGs instead of emojis for all UI indicators[cite: 1].
 
     Code Hygiene: Ensure zero trailing whitespace and strict formatting when submitting patches[cite: 1].
+
+    UI changes: read `MOBILE_LAYOUT.md` first. Phone overrides live in the mobile block at the end of the `<style>` in `index.html`, and the "mobile" media query is duplicated in JS (`mobileMQ`): keep both in sync.

@@ -1,5 +1,16 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Mobile layout (Claude, 2026-11-02)** — the UI now works on phones. Full handoff: `MOBILE_LAYOUT.md`.
+> Files: `home/templates/home/index.html`, `home/templates/registration/login.html` (CSS/markup/JS only, no backend, no migration).
+> - Sidebar → off-canvas drawer on phones (closed on load; closes after choosing/starting a chat; scrim; Escape). New elements: `.sidebar-scrim`, `.topbar-title` (both hidden on desktop).
+> - Topbar in two rows, model menus span the picker, messages/tables/code fit the width, composer uses 16px text + safe areas,
+>   Settings/Artifacts/Skills become bottom sheets, `100vh` → `100dvh` (with fallback), viewport meta gains `viewport-fit=cover` and `interactive-widget`.
+> - **Behaviour change:** on touch devices (`pointer: coarse`) Enter inserts a newline; the send button sends. Desktop unchanged.
+> - **Contract:** "mobile" = `(max-width: 760px), (pointer: coarse) and (max-height: 500px)` in the CSS block at the END of `<style>` and in JS `mobileMQ`. Keep both identical.
+> - JS: `setSidebar(collapsed, persist = true)` (mobile never persists), `closeSidebarOnMobile()`, `applySidebarDefault()`, `coarsePointer`.
+> - Tested in headless Chrome (390x844 touch, 844x390, 1280x800 desktop regression) against a fake Ollama: 26 assertions pass.
+>   NOT tested on real iOS/Android devices.
+
 > **Fix: tool notice stuck on "running…" in plain chat (Claude, 2026-10-31)** — after a plot (or a web search) the answer
 > and graph showed but the tool notice kept saying `running…`. Cause: `ollama.chat_stream` (plain chat) sent the `tool` event
 > but never `result`; the page closes a notice only on `result` (agent mode always sent it). Reproduced in headless
