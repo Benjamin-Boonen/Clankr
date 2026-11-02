@@ -3,7 +3,9 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- viewport-fit=cover + env(safe-area-*) handle notches; interactive-widget keeps the input above the on-screen keyboard (Chrome Android) -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0a0e09" />
   <title>Clank.r</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link
@@ -73,6 +75,9 @@
       grid-template-columns: 240px 1fr;
       grid-template-rows: 100vh;
       height: 100vh;
+      /* dvh = the visible height on phones (excludes the collapsing URL bar); browsers without it keep 100vh above */
+      grid-template-rows: 100dvh;
+      height: 100dvh;
       transition: grid-template-columns .2s ease;
     }
 
@@ -1219,6 +1224,107 @@
       background: var(--border2);
       border-radius: 4px;
     }
+
+    /* ═══ mobile (phones, narrow windows) — see MOBILE_LAYOUT.md ═══
+       Keep this block LAST in <style>: it overrides the desktop rules above by order, not by !important.
+       "Mobile" = narrower than 760px, OR a touch device with a short viewport (landscape phone). JS mirrors the
+       exact same query in mobileMQ: change both together. */
+    .sidebar-scrim, .topbar-title {display: none}
+
+    @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+      html, body {overscroll-behavior: none}
+      .main {padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right)}
+
+      /* sidebar → off-canvas drawer. .shell.collapsed = closed (also the default on load, see setSidebar) */
+      .shell, .shell.collapsed {grid-template-columns: 1fr}
+      .sidebar {
+        position: fixed; top: 0; bottom: 0; left: 0; z-index: 40;
+        width: min(86vw, 320px);
+        transform: none;
+        transition: transform .22s ease, visibility 0s;
+        box-shadow: 0 0 40px rgba(0, 0, 0, .55);
+      }
+      .shell.collapsed .sidebar {
+        transform: translateX(-104%); visibility: hidden; box-shadow: none;
+        transition: transform .22s ease, visibility 0s .22s;
+      }
+      .sidebar-scrim {
+        display: block; position: fixed; inset: 0; z-index: 39;
+        background: rgba(0, 0, 0, .55);
+        transition: opacity .22s ease, visibility 0s;
+      }
+      .shell.collapsed .sidebar-scrim {opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .22s ease, visibility 0s .22s}
+      .sidebar-header {padding: calc(16px + env(safe-area-inset-top)) 18px 14px}
+      .sidebar-footer {padding-bottom: calc(12px + env(safe-area-inset-bottom))}
+      .new-chat-btn {padding: 12px 14px; font-size: 14px}
+      .history-item {padding: 4px 4px 4px 12px}
+      .history-title {padding: 9px 0; font-size: 14px}
+      .history-menu-btn {flex-basis: 36px; width: 36px; height: 36px; opacity: 1}   /* no hover on touch: always visible */
+
+      /* topbar: row 1 = drawer button · title · actions, row 2 = model picker full width */
+      .topbar {padding: calc(6px + env(safe-area-inset-top)) 10px 8px; gap: 6px 8px; min-height: 0}
+      .sidebar-toggle {margin-right: 0; padding: 8px}
+      .topbar-title {
+        display: block; flex: 1; min-width: 0;
+        font: 500 16px var(--font-mono); letter-spacing: -0.03em; color: var(--accent);
+      }
+      .topbar-title span {color: var(--muted); font-weight: 300}
+      .topbar-actions {gap: 6px}
+      .icon-btn {width: 38px; height: 38px}
+      .model-badge {order: 3; flex: 1 1 100%; border-radius: 14px; padding: 6px 10px; gap: 6px 8px}
+      .caps {margin-left: 0}
+      .agent-toggle {margin-left: 0; padding: 6px 2px}
+      /* menus span the whole badge instead of hanging off their button (they overflowed the screen) */
+      .mp {position: static}
+      .mp-menu, .mp[data-level="size"] .mp-menu {left: 0; right: 0; min-width: 0; max-height: 50dvh}
+      .mp-menu li {min-height: 44px}
+
+      /* conversation */
+      .messages {padding: 14px 0 8px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch}
+      .message-row {padding: 0 14px; margin-bottom: 22px}
+      .message-row.user .msg-avatar {display: none}
+      .message-row.user .msg-bubble {max-width: 94%; padding: 11px 14px; overflow-wrap: anywhere}
+      .msg-meta {gap: 10px; font-size: 13px}
+      .ai-body {overflow-wrap: anywhere}
+      .ai-body table {display: block; max-width: 100%; overflow-x: auto; overflow-wrap: normal}   /* 'anywhere' would shrink columns to 1 character */
+      .artifact-frame {height: min(420px, 60dvh)}
+      .tool-notice summary {padding: 9px 10px}
+      .approval button {padding: .5rem 1rem; margin-bottom: .3rem}
+      .empty-state {padding: 0 18px}
+      .empty-glyph {font-size: 26px; margin-bottom: 14px}
+      .empty-sub {margin-bottom: 20px}
+      .suggestions {grid-template-columns: 1fr}
+      .latest-btn {right: 14px; bottom: calc(84px + env(safe-area-inset-bottom))}
+
+      /* composer: 16px text stops iOS Safari zooming the page on focus; hint is keyboard-only advice */
+      .input-area {padding: 8px 10px calc(8px + env(safe-area-inset-bottom))}
+      .input-box {padding: 6px 8px 6px 12px; gap: 6px; border-radius: 14px}
+      .input-box textarea {font-size: 16px; min-height: 38px; max-height: 120px}
+      .send-btn {width: 38px; height: 38px}
+      .attach-btn {font-size: 1.5rem; padding: 0 .2rem; min-width: 36px; justify-content: center}
+      .input-hint {display: none}
+
+      /* modals → bottom sheets */
+      .modal-backdrop {padding: 0; align-items: flex-end}
+      .modal, .modal.wide {
+        max-width: none; max-height: 90dvh;
+        border-radius: 16px 16px 0 0; border-bottom: none;
+        padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+      }
+      .modal select, .panel-input, .panel-select, .panel-textarea {font-size: 16px}
+      .modal-btn {padding: 12px}
+      .seg button {padding: 10px 14px}
+      .swatch {width: 32px; height: 32px}
+      #hueSlider {height: 10px}
+      #hueSlider::-webkit-slider-thumb {width: 26px; height: 26px}
+      #hueSlider::-moz-range-thumb {width: 22px; height: 22px}
+      .panel-list {max-height: 34dvh}
+      .panel-row .pr-btn {padding: 6px 12px}
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .shell .sidebar, .shell.collapsed .sidebar, .shell .sidebar-scrim, .shell.collapsed .sidebar-scrim {transition: none}   /* same specificity as the mobile rules above */
+    }
   </style>
 </head>
 
@@ -1262,6 +1368,9 @@
       </div>
     </aside>
 
+    <!-- mobile only: dims the page behind the open sidebar drawer; tap to close (hidden on desktop via CSS) -->
+    <div class="sidebar-scrim" onclick="setSidebar(true)" aria-hidden="true"></div>
+
     <!-- main -->
     <div class="main">
       <canvas id="bgNet" aria-hidden="true"></canvas>
@@ -1277,6 +1386,7 @@
             <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" />
           </svg>
         </button>
+        <div class="topbar-title">Clank<span>.r</span></div><!-- mobile only (the logo lives in the drawer there) -->
         <div class="model-badge" id="modelPicker">
           <div class="dot"></div>
           <select id="modelSelect" class="model-native" tabindex="-1" aria-hidden="true">
@@ -1623,7 +1733,7 @@
     // ─── settings panel ───
     function openSettings() {document.getElementById('settingsModal').classList.add('open');}
     function closeSettings() {document.getElementById('settingsModal').classList.remove('open');}
-    document.addEventListener('keydown', e => {if (e.key === 'Escape') closeSettings();});
+    document.addEventListener('keydown', e => {if (e.key === 'Escape') {closeSettings(); closeSidebarOnMobile();}});
 
     // ─── history ───
     function setActive(id) {
@@ -1651,17 +1761,33 @@
     }
 
     // ─── sidebar collapse (remembered per browser) ───
-    function setSidebar(collapsed) {
+    // On phones (same media query as the CSS mobile block) the sidebar is an off-canvas drawer: closed on load,
+    // closed again after you pick a chat, and its state is NOT saved (so it never overwrites the desktop choice).
+    const mobileMQ = matchMedia('(max-width: 760px), (pointer: coarse) and (max-height: 500px)');   // keep in sync with the CSS mobile block
+
+    function setSidebar(collapsed, persist = true) {
       document.getElementById('shell').classList.toggle('collapsed', collapsed);
       document.querySelector('.sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
-      try { localStorage.setItem('clankr.sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+      if (persist && !mobileMQ.matches) {
+        try { localStorage.setItem('clankr.sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+      }
     }
 
     function toggleSidebar() {
       setSidebar(!document.getElementById('shell').classList.contains('collapsed'));
     }
 
-    try { setSidebar(localStorage.getItem('clankr.sidebarCollapsed') === '1'); } catch (e) {}
+    function closeSidebarOnMobile() {
+      if (mobileMQ.matches) setSidebar(true, false);
+    }
+
+    function applySidebarDefault() {
+      let stored = false;
+      try { stored = localStorage.getItem('clankr.sidebarCollapsed') === '1'; } catch (e) {}
+      setSidebar(mobileMQ.matches || stored, false);
+    }
+    applySidebarDefault();
+    mobileMQ.addEventListener('change', applySidebarDefault);   // rotate phone / resize window
 
     historyList.addEventListener('click', async e => {
       const item = e.target.closest('.history-item');
@@ -1708,6 +1834,7 @@
       currentChatId = data.id;
       setActive(data.id);
       msgs.scrollTop = msgs.scrollHeight;
+      closeSidebarOnMobile();
     }
 
     input.addEventListener('input', () => {
@@ -1719,8 +1846,10 @@
       el.style.height = Math.max(Math.min(el.scrollHeight, 180), 34) + 'px';   // 34px = single line, centered
     }
 
+    // touch keyboards have no Shift: there Enter inserts a newline and the send button sends
+    const coarsePointer = matchMedia('(pointer: coarse)');
     function handleKey(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !coarsePointer.matches) {
         e.preventDefault();
         if (!sendBtn.disabled) sendMessage();
       }
@@ -2603,6 +2732,7 @@
       setActive(null);
       input.value = '';
       sendBtn.disabled = true;
+      closeSidebarOnMobile();
     }
 
     // ─── code blocks: header with language label + copy button ───
