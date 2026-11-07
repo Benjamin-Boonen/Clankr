@@ -202,10 +202,8 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
                "messages": [{"role": "system", "content": system}] + _compact_messages(run.msgs)}
     if "thinking" in caps: payload["think"] = allow_thinking
     if allow_tools and "tools" in caps: payload["tools"] = TOOLS
-    resp = requests.post(f"{ollama.OLLAMA_BASE}/api/chat", json=payload,
-                         stream=True, timeout=(15, 180))
+    resp = yield from ollama.open_chat(payload, timeout=(15, 180))   # grows num_ctx on "exceeds context" errors
     try:
-        ollama._check(resp)
         text, calls = [], []
         finish_reason = None
         for line in resp.iter_lines():
