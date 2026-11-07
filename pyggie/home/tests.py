@@ -316,7 +316,7 @@ class Wiring(TestCase):
         self.assertIn("Plotted", events[1][1]["out"])
         first, second = (c.kwargs["json"] for c in post.call_args_list)
         self.assertIn("plot_3d", [t["function"]["name"] for t in first["tools"]])
-        self.assertIn("plot_2d", first["messages"][0]["content"])            # system prompt mentions the tools
+        self.assertIn("plot_2d", [t["function"]["name"] for t in first["tools"]])  # tool schema is sent separately
         self.assertIn("Plotted", second["messages"][-1]["content"])          # the model gets a summary back
         self.assertEqual(Artifact.objects.filter(chat=self.chat, kind="plot").count(), 1)
 
