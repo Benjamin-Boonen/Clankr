@@ -225,6 +225,8 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
 
 def _process(run, calls):
     """Run calls in order. If one needs approval, park the rest in run.pending and stop."""
+    # Work on a private list: callers may need the original calls after processing.
+    calls = list(calls)
     if not hasattr(run, "new_artifacts"):
         run.new_artifacts = []
     while calls:
