@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Deploy the latest tested main branch to this checkout.
+# Deploy the latest main branch to this checkout.
 # Run as the Unix account that owns APP_DIR and the Python virtualenv.
-# That account needs narrowly-scoped passwordless sudo permission to restart
-# and inspect SERVICE_NAME (see CI_CD.md).
+# Grant that account narrowly-scoped passwordless sudo access to restart and
+# inspect SERVICE_NAME (see CI_CD.md).
 
 set -Eeuo pipefail
 umask 027
@@ -24,6 +24,8 @@ source "$CONFIG_FILE"
 BRANCH="${BRANCH:-main}"
 VENV_DIR="${VENV_DIR:-$APP_DIR/.venv}"
 LOCK_FILE="${LOCK_FILE:-${HOME:?HOME must be set}/.cache/clankr-deploy.lock}"
+DB_PATH="${DB_PATH:-$APP_DIR/pyggie/db.sqlite3}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/clankr}"
 PYTHON="${VENV_DIR}/bin/python"
 MANAGE_PY="${APP_DIR}/pyggie/manage.py"
 REMOTE_REF="refs/remotes/origin/$BRANCH"
@@ -58,7 +60,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   fail "Tracked local changes exist in $APP_DIR; refusing to deploy over them."
 fi
 
-echo "Checking origin/$BRANCH for Clankr updates..."
+echo "Checking origin/$BRANCH for updates..."
 git fetch --quiet origin "+refs/heads/$BRANCH:$REMOTE_REF"
 
 CURRENT_SHA="$(git rev-parse HEAD)"
@@ -69,8 +71,8 @@ if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
   exit 0
 fi
 
-# Only fast-forward deployments are allowed. A local commit or divergent
-# history must be resolved manually rather than discarded automatically.
+# Only fast-forward deployments are allowed. Divergent history must be
+# resolved manually rather than discarded automatically.
 if ! git merge-base --is-ancestor HEAD "$REMOTE_REF"; then
   fail "Local checkout and origin/$BRANCH have diverged; refusing to reset."
 fi
@@ -83,6 +85,23 @@ echo "Installing Python dependencies..."
 
 echo "Running Django system checks..."
 "$PYTHON" "$MANAGE_PY" check
+
+# Take a consistent SQLite backup before applying migrations. The backup is
+# kept outside the Git checkout and is never automatically deleted.
+if [[ -f "$DB_PATH" ]]; then
+  mkdir -p "$BACKUP_DIR"
+  BACKUP_FILE="$BACKUP_DIR/db-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
+  echo "Backing up SQLite database to $BACKUP_FILE..."
+  "$PYTHON" - "$DB_PATH" "$BACKUP_FILE" <<'PY'
+import sqlite3
+import sys
+
+source_path, backup_path = sys.argv[1:3]
+with sqlite3.connect(source_path) as source:
+    with sqlite3.connect(backup_path) as backup:
+        source.backup(backup)
+PY
+fi
 
 echo "Applying database migrations..."
 "$PYTHON" "$MANAGE_PY" migrate --noinput
