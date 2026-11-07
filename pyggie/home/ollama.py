@@ -1,5 +1,7 @@
 # home/ollama.py — wrapper for the Ollama API, with tool calling (web search)
 import json
+import math
+import os
 import re
 import datetime
 import logging
@@ -67,6 +69,90 @@ def _check(resp):
     """Like raise_for_status, but includes Ollama's own error message."""
     if not resp.ok:
         raise RuntimeError(f"Ollama {resp.status_code}: {resp.text}")
+
+
+# --- Dynamic context window ---------------------------------------------------
+# Ollama serves a model with a small default context (often 4096 tokens). A long
+# prompt then fails with HTTP 400 "request (N tokens) exceeds the available
+# context size (M tokens), try increasing it". open_chat() catches exactly that,
+# raises num_ctx just enough, tells the user, and retries. See CONTEXT_AUTO_RESIZE.md.
+NUM_CTX_STEP = 4096                                           # num_ctx is rounded up to a multiple of this
+MAX_NUM_CTX = int(os.environ.get("CLANKR_MAX_NUM_CTX", 32768))  # hard ceiling (VRAM!), also capped by the model's own limit
+MAX_CTX_RETRIES = 3
+CTX_ERROR_RE = re.compile(
+    r"request \((\d+) tokens?\) exceeds the available context size \((\d+) tokens?\)", re.I)
+_ctx_overrides = {}     # model -> num_ctx learned this process; reused so later requests don't fail+reload again
+_max_ctx_cache = {}     # model -> the model's trained context length (None = unknown); failures are not cached
+
+
+class ContextTooLarge(RuntimeError):
+    """The prompt cannot fit even in the largest allowed context window."""
+
+
+def parse_ctx_error(text):
+    """(prompt_tokens, available_tokens) from Ollama's context-size error, else None."""
+    m = CTX_ERROR_RE.search(text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def get_max_ctx(name):
+    """The model's trained context length from /api/show, or None if unknown."""
+    if name in _max_ctx_cache:
+        return _max_ctx_cache[name]
+    try:
+        r = requests.post(f"{OLLAMA_BASE}/api/show", json={"model": name}, timeout=10)
+        info = r.json().get("model_info", {}) if r.ok else {}
+        vals = [v for k, v in info.items() if k.endswith(".context_length") and isinstance(v, int)]
+    except Exception:
+        return None
+    _max_ctx_cache[name] = max(vals) if vals else None
+    return _max_ctx_cache[name]
+
+
+def next_num_ctx(model, prompt_tokens, current, num_predict=0):
+    """Smallest num_ctx (multiple of NUM_CTX_STEP) holding the prompt plus the reply budget, capped."""
+    cap = MAX_NUM_CTX
+    if model_max := get_max_ctx(model):
+        cap = min(cap, model_max)
+    if prompt_tokens >= cap:
+        raise ContextTooLarge(
+            f"This conversation (~{prompt_tokens:,} tokens) doesn't fit the largest context window "
+            f"allowed ({cap:,} tokens). Start a new chat or remove attachments. "
+            "(To allow more, raise CLANKR_MAX_NUM_CTX if your GPU has the memory.)")
+    want = prompt_tokens + (num_predict or 0)
+    new = min(cap, math.ceil(want / NUM_CTX_STEP) * NUM_CTX_STEP)
+    if new <= current:
+        raise ContextTooLarge(f"Context window is already at its limit ({current:,} tokens).")
+    return new
+
+
+def open_chat(payload, **kwargs):
+    """POST a streaming /api/chat request, growing num_ctx when Ollama says the prompt doesn't fit.
+
+    Use as `resp = yield from open_chat(payload, ...)` inside an event generator: it yields
+    ("status", text) events while resizing and returns the open response. Mutates
+    payload["options"]["num_ctx"]. Other Ollama errors raise RuntimeError as before.
+    """
+    model = payload["model"]
+    options = payload.setdefault("options", {})
+    if model in _ctx_overrides:
+        options["num_ctx"] = _ctx_overrides[model]
+    for attempt in range(MAX_CTX_RETRIES + 1):
+        resp = requests.post(f"{OLLAMA_BASE}/api/chat", json=payload, stream=True, **kwargs)
+        if resp.ok:
+            return resp
+        body = resp.text
+        resp.close()
+        found = parse_ctx_error(body)
+        if not found or attempt == MAX_CTX_RETRIES:
+            raise RuntimeError(f"Ollama {resp.status_code}: {body}")
+        needed, available = found
+        new = next_num_ctx(model, needed, max(available, options.get("num_ctx", 0)),
+                           options.get("num_predict", 0))
+        yield "status", (f"Context window too small ({needed:,} tokens needed, {available:,} available). "
+                         f"Reloading the model with {new:,} — slower this once…")
+        options["num_ctx"] = _ctx_overrides[model] = new
+        logger.info("Raised num_ctx for %s: %s -> %s (prompt %s tokens)", model, available, new, needed)
 
 
 @lru_cache(maxsize=None)
@@ -290,11 +376,10 @@ def chat_stream(model, messages, chat_id=None, thinking=True):
         if "tools" in caps and round_no < MAX_ROUNDS - 1 and continuation_count == 0:
             payload["tools"] = TOOLS + plots.TOOLS
 
-        resp = requests.post(f"{OLLAMA_BASE}/api/chat", json=payload, stream=True)
+        resp = yield from open_chat(payload)        # yields a status event if num_ctx had to grow
         content, tool_calls = [], []
         finish_reason = None
         try:
-            _check(resp)
             for line in resp.iter_lines():
                 if not line:
                     continue

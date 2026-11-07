@@ -1,5 +1,8 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Auto context-window growth (Claude, 2026-11-07)** — Ollama's "request (N tokens) exceeds the available context size (4096 tokens)" 400 is now caught; `num_ctx` is raised and the request retried, with a `status` message. Full handoff: `CONTEXT_AUTO_RESIZE.md`.
+> Files: `home/ollama.py` (`open_chat`, `next_num_ctx`, `parse_ctx_error`), `home/agent.py` (`_model_round`), `home/test_ctx_resize.py`. Env: `CLANKR_MAX_NUM_CTX` (default 32768).
+
 > **Mobile layout (Claude, 2026-11-02)** — the UI now works on phones. Full handoff: `MOBILE_LAYOUT.md`.
 > Files: `home/templates/home/index.html`, `home/templates/registration/login.html` (CSS/markup/JS only, no backend, no migration).
 > - Sidebar → off-canvas drawer on phones (closed on load; closes after choosing/starting a chat; scrim; Escape). New elements: `.sidebar-scrim`, `.topbar-title` (both hidden on desktop).
