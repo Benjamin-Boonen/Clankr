@@ -23,7 +23,9 @@ source "$CONFIG_FILE"
 
 BRANCH="${BRANCH:-main}"
 VENV_DIR="${VENV_DIR:-$APP_DIR/.venv}"
+STATE_DIR="${STATE_DIR:-${HOME:?HOME must be set}/.local/state}"
 LOCK_FILE="${LOCK_FILE:-${HOME:?HOME must be set}/.cache/clankr-deploy.lock}"
+DEPLOYED_SHA_FILE="${DEPLOYED_SHA_FILE:-$STATE_DIR/clankr-deployed-sha}"
 DB_PATH="${DB_PATH:-$APP_DIR/pyggie/db.sqlite3}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/clankr}"
 PYTHON="${VENV_DIR}/bin/python"
@@ -32,7 +34,7 @@ REMOTE_REF="refs/remotes/origin/$BRANCH"
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-mkdir -p "$(dirname "$LOCK_FILE")"
+mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$DEPLOYED_SHA_FILE")"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Another Clankr deployment is already running; skipping."
@@ -63,21 +65,34 @@ fi
 echo "Checking origin/$BRANCH for updates..."
 git fetch --quiet origin "+refs/heads/$BRANCH:$REMOTE_REF"
 
-CURRENT_SHA="$(git rev-parse HEAD)"
 TARGET_SHA="$(git rev-parse "$REMOTE_REF")"
+CURRENT_SHA="$(git rev-parse HEAD)"
 
-if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
-  echo "Clankr is already up to date ($CURRENT_SHA)."
+# Track the last successfully deployed commit separately from HEAD. This is
+# essential: if installation/migration/restart fails after checkout advances,
+# the next cron run must retry instead of incorrectly reporting "up to date".
+if [[ ! -s "$DEPLOYED_SHA_FILE" ]]; then
+  printf '%s\n' "$CURRENT_SHA" > "$DEPLOYED_SHA_FILE"
+fi
+DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOYED_SHA_FILE")"
+
+[[ "$DEPLOYED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid deployed commit marker: $DEPLOYED_SHA"
+git cat-file -e "$DEPLOYED_SHA^{commit}" 2>/dev/null || fail "Previously deployed commit is not present in this checkout."
+
+if [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]]; then
+  echo "Clankr is already deployed at $TARGET_SHA."
   exit 0
 fi
 
-# Only fast-forward deployments are allowed. Divergent history must be
-# resolved manually rather than discarded automatically.
-if ! git merge-base --is-ancestor HEAD "$REMOTE_REF"; then
-  fail "Local checkout and origin/$BRANCH have diverged; refusing to reset."
+# Only forward deployments are allowed. Do not silently discard a rollback
+# or divergent history; handle those deliberately.
+if ! git merge-base --is-ancestor "$DEPLOYED_SHA" "$TARGET_SHA"; then
+  fail "origin/$BRANCH is not a descendant of the last deployed commit; refusing automatic rollback."
 fi
 
-echo "Deploying $CURRENT_SHA -> $TARGET_SHA"
+echo "Deploying $DEPLOYED_SHA -> $TARGET_SHA"
+
+# Move the worktree to the exact fetched commit. No git clean is ever run.
 git reset --hard "$TARGET_SHA"
 
 echo "Installing Python dependencies..."
@@ -112,5 +127,9 @@ sudo -n /usr/bin/systemctl restart "$SERVICE_NAME"
 echo "Verifying systemd service..."
 sudo -n /usr/bin/systemctl is-active --quiet "$SERVICE_NAME" \
   || fail "$SERVICE_NAME did not become active after restart."
+
+# Mark this SHA deployed only after every deployment step has succeeded.
+printf '%s\n' "$TARGET_SHA" > "$DEPLOYED_SHA_FILE.tmp"
+mv "$DEPLOYED_SHA_FILE.tmp" "$DEPLOYED_SHA_FILE"
 
 echo "Deployment successful: $TARGET_SHA"
