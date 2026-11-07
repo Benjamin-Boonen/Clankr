@@ -31,9 +31,9 @@ The server-side deployment script is `scripts/deploy.sh`. It polls `origin/main`
 7. Runs `manage.py check`.
 8. Creates a consistent SQLite backup (when the configured database file exists).
 9. Runs `manage.py migrate --noinput`.
-10. Restarts the configured systemd service and checks that it is active.
+10. Restarts the configured systemd service, checks that it is active, and only then updates the last-successfully-deployed commit marker.
 
-It does not run `git clean`, delete runtime files, or automatically roll back code after a failed deployment. Database backups are retained; arrange a separate backup-retention policy. A failed deployment stops before the systemd restart whenever possible, but code may already have been updated on disk. Review logs and repair manually if a step fails.
+It does not run `git clean`, delete runtime files, or automatically roll back code after a failed deployment. The separate deployed-commit marker means a failed install, migration, or restart is retried on the next cron run even if the Git checkout has already advanced. Database backups are retained; arrange a separate backup-retention policy. Code may already have been updated on disk when a step fails, so inspect logs before manually intervening.
 
 ### One-time server setup
 
@@ -64,9 +64,10 @@ Run these steps as an administrator, adapting paths and account names.
    BRANCH="main"
    DB_PATH="/opt/clankr/pyggie/db.sqlite3"
    BACKUP_DIR="/var/backups/clankr"
+   # Optional: DEPLOYED_SHA_FILE="/home/clankr/.local/state/clankr-deployed-sha"
    ```
 
-   Keep this file root-owned and not writable by the deployment account. The account running the script must be able to read it. Adjust `DB_PATH` if Django's SQLite database is stored elsewhere. Ensure that account can write to `BACKUP_DIR`; create it with suitable ownership before the first deployment.
+   Keep this file root-owned and not writable by the deployment account. The account running the script must be able to read it. Adjust `DB_PATH` if Django's SQLite database is stored elsewhere. Ensure that account can write to `BACKUP_DIR`; create it with suitable ownership before the first deployment. The script stores the last successfully deployed commit in `~/.local/state/clankr-deployed-sha` by default; keep this file between runs, or set `DEPLOYED_SHA_FILE` explicitly.
 
 4. Give the deployment account permission to restart and inspect only this service. Use `sudo visudo -f /etc/sudoers.d/clankr-deploy` and add (replace `clankr` and the service name):
 
@@ -90,7 +91,7 @@ Run these steps as an administrator, adapting paths and account names.
    /bin/bash /opt/clankr/scripts/deploy.sh
    ```
 
-   The first run should report that Clankr is up to date. Then inspect the output and verify the service. Do not schedule it until the paths, permissions, database backup, and systemd restart all work as expected.
+   The first run records the current checkout as the baseline if no deployment marker exists. It should report that Clankr is already deployed if the checkout matches `origin/main`. Then inspect the output and verify the service. Do not schedule it until the paths, permissions, database backup, and systemd restart all work as expected.
 
 ### Cron entry
 
