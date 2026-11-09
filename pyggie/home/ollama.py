@@ -11,7 +11,7 @@ import requests
 import trafilatura
 from ddgs import DDGS
 
-from . import plots, context
+from . import plots, context, handoff
 
 OLLAMA_BASE = "http://localhost:11434"
 logger = logging.getLogger(__name__)
@@ -353,7 +353,7 @@ def chat_stream(model, messages, chat_id=None, thinking=True):
     MAX_ROUNDS, while a truncated final answer gets at most two extra calls.
     """
     caps = get_caps(model)
-    system = SYSTEM_PROMPT + (plots.PLOT_PROMPT if "tools" in caps else "") + \
+    system = SYSTEM_PROMPT + (plots.PLOT_PROMPT + handoff.PROMPT if "tools" in caps else "") + \
         f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
     pressure = context.context_pressure(messages)
     if pressure["suggest_new_chat"]:
@@ -374,7 +374,7 @@ def chat_stream(model, messages, chat_id=None, thinking=True):
         # Continuation calls never get tools: they should finish the current
         # answer, not restart research or perform additional side effects.
         if "tools" in caps and round_no < MAX_ROUNDS - 1 and continuation_count == 0:
-            payload["tools"] = TOOLS + plots.TOOLS
+            payload["tools"] = TOOLS + plots.TOOLS + [handoff.TOOL]
 
         resp = yield from open_chat(payload)        # yields a status event if num_ctx had to grow
         content, tool_calls = [], []
@@ -399,6 +399,15 @@ def chat_stream(model, messages, chat_id=None, thinking=True):
             resp.close()      # stopping early must drop the connection to Ollama
 
         text = "".join(content)
+        if promo := handoff.find(tool_calls):
+            # The model asked to continue as an agent. Other calls in this round are dropped (the agent
+            # can redo them). views.send_message swallows "promote" and starts the agent run (handoff.py).
+            task, reason = handoff.details(parse_args(promo["function"].get("arguments")))
+            out = handoff.notice(reason)
+            yield "tool", {"name": handoff.NAME, "arg": reason or task}
+            yield "result", {"name": handoff.NAME, "out": out}
+            yield "promote", {"task": task, "reason": reason}
+            return
         if tool_calls:
             msgs.append({"role": "assistant", "content": text, "tool_calls": tool_calls})
             for call in tool_calls:

@@ -13,6 +13,7 @@ THIS PROJECT IS PARTLY VIBECODED, I DO NOT CLAIM FULL RESPONSIBILITY FOR THE EXE
 - **Professional SVG Icons**: Complete removal of emojis across the user interface, replaced with clean, scalable inline SVG logos and icons[cite: 1].
 - **Vision Model Support**: Automated detection of vision-capable models via template logic (`is_vision`), complete with dedicated badge and icon rendering in both selectors and headers[cite: 1].
 - **Interactive Graphs**: models with tool support can draw 2D curves, 3D surfaces/contours and parametric curves (`plot_2d`, `plot_3d`, `plot_curve`, see `pyggie/home/plots.py` and `CHANGES.md`). Rendered with Plotly.js; formulas are parsed safely, never `eval`'d.
+- **Self-promoting agent**: in plain chat the model can switch itself to agent mode (`promote_to_agent`) when a task needs code, files or many steps; approvals still apply. See `HANDOFF_TO_AGENT.md`.
 - **Mobile Layout**: phone-friendly UI (sidebar drawer, bottom-sheet modals, touch-sized controls, safe-area and keyboard aware). See `MOBILE_LAYOUT.md`.
 - **Multi-Agent Collaboration Ready**: Standardized component mapping and synchronized documentation notes designed to support multiple AI agents working concurrently on the repository[cite: 1].
 

@@ -1,5 +1,14 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+> **Self-promotion to agent mode (Claude, 2026-11-09)** — in plain chat the model can call `promote_to_agent(task, reason)`
+> and the same turn continues as an agent run in the same stream. Full handoff: `HANDOFF_TO_AGENT.md`.
+> Files: `home/handoff.py` (new), `home/ollama.py` (`chat_stream`), `home/views.py` (`send_message`, `_handoff_to_agent`, `_agent_sse`),
+> `home/templates/home/index.html` (label + icon only), `home/test_handoff.py` (13 tests). No migration.
+> - **Contract:** `ollama.chat_stream` yields internal event `promote`; `views.send_message` swallows it. No new event kind reaches the browser.
+> - **Safety:** no new permissions (run_python/run_shell still need approval); `agent.TOOLS` must not contain `promote_to_agent`.
+> - **Refactor:** `_agent_stream` is now a thin wrapper over `_agent_sse()` (no `[DONE]`); `/agent/send/` and `/agent/approve/` behave as before.
+> - NOT tested with real models or in a browser. 2 older tests in `tests.py` fail on a clean checkout too (see the handoff doc).
+
 > **Auto context-window growth (Claude, 2026-11-07)** — Ollama's "request (N tokens) exceeds the available context size (4096 tokens)" 400 is now caught; `num_ctx` is raised and the request retried, with a `status` message. Full handoff: `CONTEXT_AUTO_RESIZE.md`.
 > Files: `home/ollama.py` (`open_chat`, `next_num_ctx`, `parse_ctx_error`), `home/agent.py` (`_model_round`), `home/test_ctx_resize.py`. Env: `CLANKR_MAX_NUM_CTX` (default 32768).
 

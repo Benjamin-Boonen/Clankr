@@ -6,7 +6,7 @@ from django.views.decorators.http import require_POST
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.shortcuts import render, get_object_or_404
 from .models import Chat, Message, AgentRun, Artifact
-from . import agent, files, plots
+from . import agent, files, plots, handoff
 from django.http import HttpResponse
 from django.core.cache import cache
 from . import ollama
@@ -103,10 +103,15 @@ def send_message(request):
         # kind is 'token', 'thinking', 'tool' or 'status'; only the answer is saved.
         # finally: whatever was written is saved, even when stopped or disconnected
         replies = ollama.chat_stream(model=model, messages=history, chat_id=chat.id, thinking=thinking)
+        promoted, stopped = None, False
         try:
             for kind, value in replies:
                 if _stop_requested(chat.id):
+                    stopped = True
                     break                      # the user pressed stop
+                if kind == 'promote':          # the model chose agent mode (handoff.py); internal, not sent on
+                    promoted = value
+                    continue
                 if kind == 'token':
                     full_reply.append(value)
                 yield f"data: {json.dumps({kind: value})}\n\n"
@@ -117,37 +122,57 @@ def send_message(request):
             cache.delete(_stop_key(chat.id))
             if ''.join(full_reply).strip():
                 Message.objects.create(chat=chat, role='ai', content=''.join(full_reply))
+        if promoted and not stopped:
+            yield from _handoff_to_agent(chat, msg, model, thinking, history, promoted)
         yield "data: [DONE]\n\n"
 
     return StreamingHttpResponse(stream(), content_type='text/event-stream')
+
+
+def _agent_sse(run, chat, gen):
+    """SSE lines for one agent generator; saves the assistant's text as one AI message and the run
+    state at the end. Sends no [DONE]: the caller does (agent turns and plain-chat handoffs share this)."""
+    texts = []
+    stopped = False
+    try:
+        for kind, value in gen:
+            if _stop_requested(chat.id):
+                stopped = True
+                break                      # the user pressed stop
+            if kind == 'token': texts.append(value)
+            yield f"data: {json.dumps({kind: value})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
+    finally:
+        # runs even if the browser disconnects mid-stream, so the reply is kept
+        gen.close()
+        cache.delete(_stop_key(chat.id))
+        if stopped:
+            run.status, run.pending = 'stopped', []
+        run.save()
+        if ''.join(texts).strip():
+            Message.objects.create(chat=chat, role='ai', content=''.join(texts))
 
 
 def _agent_stream(run, chat, gen, prefix_events=()):
-    """Wrap an agent generator as SSE; saves the assistant's text as one AI message at the end."""
-    texts = []
+    """Wrap an agent generator as an SSE response (first chunk: chat_id + run_id)."""
     def stream():
         yield f"data: {json.dumps({'chat_id': chat.id, 'run_id': run.id})}\n\n"
-        stopped = False
-        try:
-            for kind, value in gen:
-                if _stop_requested(chat.id):
-                    stopped = True
-                    break                      # the user pressed stop
-                if kind == 'token': texts.append(value)
-                yield f"data: {json.dumps({kind: value})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': ollama.friendly_error(e)})}\n\n"
-        finally:
-            # runs even if the browser disconnects mid-stream, so the reply is kept
-            gen.close()
-            cache.delete(_stop_key(chat.id))
-            if stopped:
-                run.status, run.pending = 'stopped', []
-            run.save()
-            if ''.join(texts).strip():
-                Message.objects.create(chat=chat, role='ai', content=''.join(texts))
+        yield from _agent_sse(run, chat, gen)
         yield "data: [DONE]\n\n"
     return StreamingHttpResponse(stream(), content_type='text/event-stream')
+
+
+def _handoff_to_agent(chat, msg, model, thinking, history, promoted):
+    """The model called promote_to_agent in plain chat: continue THIS turn as an agent run, in the
+    same SSE stream. The history it already saw + a note with the task become the run's transcript.
+    Approval still applies (the stream may end on an 'approval' event, resumed via /agent/approve/)."""
+    agent.copy_to_workspace(chat.id, msg)         # so run_python / read_file can open the attachments
+    run = AgentRun.objects.create(chat=chat, model=model, thinking_enabled=thinking,
+                                  msgs=list(history) + [{"role": "user", "content": handoff.agent_note(promoted["task"])}])
+    yield f"data: {json.dumps({'run_id': run.id})}\n\n"
+    yield f"data: {json.dumps({'status': 'Switched to agent mode'})}\n\n"
+    yield from _agent_sse(run, chat, agent.drive(run, model))
 
 @login_required
 @require_POST
