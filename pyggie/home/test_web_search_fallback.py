@@ -44,7 +44,7 @@ class WebSearchFallbackTests(SimpleTestCase):
         results = ollama._search_web("query with no matches")
 
         self.assertEqual(results, [])
-        self.assertEqual(ddgs.return_value.text.call_count, 6)
+        self.assertEqual(ddgs.return_value.text.call_count, 5)
 
     @mock.patch.object(ollama, "DDGS")
     def test_all_backend_errors_raise_diagnostic_error(self, ddgs):
