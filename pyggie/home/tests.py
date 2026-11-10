@@ -437,9 +437,11 @@ class AgentThinkingPrivacyTests(SimpleTestCase):
 
         self_payload = []
         run = SimpleNamespace(msgs=[{"role": "user", "content": "Continue."}])
-        with mock.patch.object(ollama, "get_caps", return_value=("completion", "thinking")), \\
-             mock.patch.object(ollama, "is_loaded", return_value=True), \\
-             mock.patch.object(ollama, "open_chat", side_effect=fake_open_chat):
+        with (
+            mock.patch.object(ollama, "get_caps", return_value=("completion", "thinking")),
+            mock.patch.object(ollama, "is_loaded", return_value=True),
+            mock.patch.object(ollama, "open_chat", side_effect=fake_open_chat),
+        ):
             events = list(agent._model_round("test-model", run, allow_thinking=True))
 
         self.assertFalse(any(kind == "thinking" for kind, _ in events))
