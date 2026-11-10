@@ -332,7 +332,11 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
         for line in resp.iter_lines():
             if not line: continue
             c = json.loads(line); m = c.get("message", {})
-            if t := m.get("thinking"): yield "thinking", t
+            # Ollama's `thinking` field is private model reasoning, not answer text.
+            # Never stream it to the browser: small models often expose raw planning,
+            # self-talk and continuation instructions here. The Thinking toggle still
+            # controls whether Ollama performs reasoning; the UI shows activity status
+            # and tool progress without displaying the private trace.
             if t := m.get("content"): text.append(t); yield "token", t
             for name, frag in ollama.merge_tool_calls(calls, m.get("tool_calls")):
                 yield "tool_arg", {"name": name or "", "delta": frag}
