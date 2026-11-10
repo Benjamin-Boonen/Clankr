@@ -129,7 +129,7 @@ def _record_tool_result(run, name, args, result):
     ).hexdigest()
     ledger = state["tool_ledger"]
     ledger.append({
-        "fingerprint": fingerprint, "name": name, "args": args,
+        "fingerprint": fingerprint, "name": name,
         "result": str(result)[:MAX_LEDGER_RESULT_CHARS],
         "ok": not str(result).startswith(("Tool error:", "Plot error:")),
     })
