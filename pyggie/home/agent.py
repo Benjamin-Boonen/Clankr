@@ -166,14 +166,35 @@ def _working_state_prompt(run):
 
 
 
+def _research_result_is_empty(name, content):
+    """Recognize an empty/failed research result so rephrased retries cannot loop."""
+    content = (content or "").strip()
+    if content.startswith("Tool error:"):
+        return True
+    if name == "web_search":
+        try:
+            result = json.loads(content)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(result, list) and not result
+    if name == "fetch_page":
+        return content.startswith("Could not read this page.")
+    return False
+
+
 def _research_limit_reached(run, name):
-    """Bound semantically repetitive research even when query wording changes."""
+    """Stop research after an empty/failed result, even if the next query is reworded."""
     limits = {"web_search": 2, "fetch_page": 2}
     if name not in limits:
         return False
-    prior = sum(1 for message in run.msgs
-                if message.get("role") == "tool" and message.get("tool_name") == name)
-    return prior >= limits[name]
+    prior_results = [
+        message.get("content", "")
+        for message in run.msgs
+        if message.get("role") == "tool" and message.get("tool_name") == name
+    ]
+    if any(_research_result_is_empty(name, result) for result in prior_results):
+        return True
+    return len(prior_results) >= limits[name]
 
 
 def _compact_messages(messages):
