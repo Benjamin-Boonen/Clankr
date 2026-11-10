@@ -331,19 +331,63 @@ def parse_args(raw):
     return raw or {}
 
 
+def _search_web(query, max_results=6):
+    """Search with DDGS auto selection, then explicit independent providers.
+
+    DDGS can return [] when its selected provider is blocked/rate-limited without
+    raising an exception. Trying explicit providers here keeps that failure inside
+    one tool invocation instead of asking the model to rephrase the same search.
+    """
+    providers = ("brave", "mojeek", "startpage", "yahoo", "wikipedia")
+    failures = []
+    attempts = (("auto",) + providers)
+    for backend in attempts:
+        try:
+            # A fresh client per backend avoids carrying provider-specific state
+            # (such as cookies or challenge responses) into the next attempt.
+            hits = DDGS(timeout=10).text(
+                query, max_results=max_results, backend=backend
+            )
+            if hits:
+                logger.info(
+                    "web_search succeeded: backend=%s results=%d query=%r",
+                    backend, len(hits), query[:160]
+                )
+                return [
+                    {"title": h.get("title", ""), "url": h.get("href", ""),
+                     "snippet": h.get("body", "")}
+                    for h in hits if h.get("href")
+                ]
+            logger.warning(
+                "web_search backend returned no results: backend=%s query=%r",
+                backend, query[:160]
+            )
+        except Exception as exc:
+            failures.append(f"{backend}: {type(exc).__name__}: {exc}")
+            logger.warning(
+                "web_search backend failed: backend=%s query=%r error=%s",
+                backend, query[:160], exc
+            )
+    if failures:
+        raise RuntimeError(
+            "All web search backends failed or returned no results. "
+            + " | ".join(failures[:3])
+        )
+    return []
+
+
 def run_tool(name, args):
     try:
         if name == "web_search":
-            hits = DDGS().text(args["query"], max_results=6)
-            return json.dumps([{"title": h["title"], "url": h["href"], "snippet": h["body"]}
-                               for h in hits])
+            return json.dumps(_search_web(args["query"]), ensure_ascii=False)
         if name == "fetch_page":
             html = trafilatura.fetch_url(args["url"])
             text = trafilatura.extract(html) if html else None
             return (text or "Could not read this page.")[:PAGE_CHARS]
         return f"Unknown tool {name}"
     except Exception as e:
-        return f"Tool error: {e}"
+        logger.exception("Research tool failed: %s", name)
+        return f"Tool error: {type(e).__name__}: {e}"
 
 
 def chat_stream(model, messages, chat_id=None, thinking=True):
