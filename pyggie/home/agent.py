@@ -162,7 +162,7 @@ def _working_state_prompt(run):
         "next_step": state["next_step"],
         "rule": "Continue from this state. Reuse recorded results; do not redo completed actions."
     }
-    return "\\n\\nPERSISTENT TASK STATE (authoritative across model/tool rounds):\\n" + json.dumps(
+    return "\n\nPERSISTENT TASK STATE (authoritative across model/tool rounds):\n" + json.dumps(
         snapshot, ensure_ascii=False, separators=(",", ":")
     )
 
@@ -336,7 +336,7 @@ def _process(run, calls):
         # Block duplicate calls before approval so they cannot trigger another prompt.
         prior_result = _prior_tool_result(run, name, args) if name in REPEAT_SAFE else None
         if prior_result is not None:
-            out = ("REUSED PREVIOUS TOOL RESULT (not re-executed):\\n" + prior_result)
+            out = ("REUSED PREVIOUS TOOL RESULT (not re-executed):\n" + prior_result)
         elif _is_repeat(run, name, args):
             out = ("This tool call was repeated but its original result is unavailable. "
                    "Do not repeat it again; continue with the evidence already in the transcript.")
