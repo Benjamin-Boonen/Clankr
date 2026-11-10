@@ -77,22 +77,21 @@ MAX_LEDGER_RESULT_CHARS = 8000
 
 
 def _canonical_tool_args(name, args):
-    """Stable fingerprint input; normalize harmless query/code formatting only."""
+    """Stable fingerprint input without changing case-sensitive code or filesystem paths."""
     def normalize(value, key=""):
         if isinstance(value, dict):
             return {k: normalize(v, k) for k, v in sorted(value.items())}
         if isinstance(value, list):
             return [normalize(v, key) for v in value]
         if isinstance(value, str):
-            if key in {"query", "url", "path", "name"}:
+            if key == "query":
                 return re.sub(r"\s+", " ", value).strip().casefold()
-            if key == "code":
-                return re.sub(r"\s+", "", value)
-            if key == "command":
-                return re.sub(r"\s+", " ", value).strip()
+            if key in {"url", "path"}:
+                return value.strip()
+            if key == "name":
+                return value.strip().casefold()
         return value
     return json.dumps(normalize(args), sort_keys=True, ensure_ascii=False)
-
 
 def _state_record(run):
     for message in run.msgs:
