@@ -21,7 +21,7 @@ class WebSearchFallbackTests(SimpleTestCase):
         self.assertEqual(results[0]["title"], "Rabbit biology")
         self.assertEqual(client.text.call_count, 2)
         self.assertEqual(client.text.call_args_list[0].kwargs["backend"], "auto")
-        self.assertEqual(client.text.call_args_list[1].kwargs["backend"], "brave")
+        self.assertEqual(client.text.call_args_list[1].kwargs["backend"], "duckduckgo")
 
     @mock.patch.object(ollama, "DDGS")
     def test_backend_exception_does_not_prevent_fallback(self, ddgs):
