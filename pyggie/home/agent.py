@@ -44,7 +44,10 @@ AGENT_PROMPT = (
     "tool call, compare it with prior calls and results; do not repeat the same or equivalent computation, script, "
     "file write, plot, search, or explanation when the result is already available. Retry only after a concrete "
     "failure and with a materially changed approach. If a result is unavailable, contradictory, or enough to answer, stop "
-    "research and finish with the evidence you have; never search in a loop. Prefer run_python for computation. "
+    "research and finish with the evidence you have; never search in a loop. If web_search returns an empty result list "
+    "or a research tool returns a Tool error / unreadable-page result, do NOT retry with a rephrased query. "
+    "Treat that as a search failure, disclose the limitation briefly, and answer from reliable existing knowledge. "
+    "Prefer run_python for computation. "
     "Use create_artifact for deliverables the user should keep, including Python scripts (kind=python) and shell scripts (kind=shell); "
     "use write_file when a script needs to be part of a multi-file workspace. User attachments are in the workspace. "
     "Never execute Python or shell code without the explicit approval prompt; creating/writing a script is not permission to run it. "
@@ -166,14 +169,35 @@ def _working_state_prompt(run):
 
 
 
+def _research_result_is_empty(name, content):
+    """Recognize an empty/failed research result so rephrased retries cannot loop."""
+    content = (content or "").strip()
+    if content.startswith("Tool error:"):
+        return True
+    if name == "web_search":
+        try:
+            result = json.loads(content)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(result, list) and not result
+    if name == "fetch_page":
+        return content.startswith("Could not read this page.")
+    return False
+
+
 def _research_limit_reached(run, name):
-    """Bound semantically repetitive research even when query wording changes."""
+    """Stop research after an empty/failed result, even if the next query is reworded."""
     limits = {"web_search": 2, "fetch_page": 2}
     if name not in limits:
         return False
-    prior = sum(1 for message in run.msgs
-                if message.get("role") == "tool" and message.get("tool_name") == name)
-    return prior >= limits[name]
+    prior_results = [
+        message.get("content", "")
+        for message in run.msgs
+        if message.get("role") == "tool" and message.get("tool_name") == name
+    ]
+    if any(_research_result_is_empty(name, result) for result in prior_results):
+        return True
+    return len(prior_results) >= limits[name]
 
 
 def _compact_messages(messages):
