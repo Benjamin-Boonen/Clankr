@@ -41,7 +41,7 @@ SYSTEM_PROMPT = (
     "Use LaTeX only for actual mathematical expressions: inline between single dollar signs ($x^2$), "
     "displayed between double dollar signs ($$ ... $$). Write ordinary words, plain numbers and "
     "units as plain text. Never draw math as ASCII art.\n"
-    "You have two tools: web_search and fetch_page. Use them only when external/current information "
+    "Your web research tools are web_search and fetch_page. Use them only when external/current information "
     "is needed or the user asks for research. Do not search for maths, reasoning, or facts already supplied "
     "in the conversation. First identify the specific missing information a search would add; use one focused "
     "query, and fetch at most one or two useful pages when snippets are insufficient. Treat tool results as "
