@@ -14,7 +14,7 @@ Reduce repeated tool execution and loss of task context across agent model round
 - Builds a short `PERSISTENT TASK STATE` block into the system prompt on every model round. This block is independent of the model's hidden reasoning and survives model-round boundaries and approval/resume because it is saved with the AgentRun.
 - Filters the metadata record out of the ordinary chat transcript sent to Ollama. It is application state, not a chat role/message.
 - Stores a SHA-256 fingerprint and clipped result for executed tools. The ledger is bounded to 20 entries, with each result clipped to 8,000 characters.
-- On an equivalent repeated safe tool call, replays the previous result into the tool transcript instead of executing the tool again. Normalized query/URL/path/name whitespace and case are used for fingerprints; Python code is normalized for whitespace only.
+- On an equivalent repeated safe tool call, replays the previous result into the tool transcript instead of executing the tool again. Query whitespace/case and skill-name case are normalized; URL and filesystem-path case are preserved. Code and shell commands are fingerprinted exactly to avoid merging semantically different scripts.
 - Keeps the existing duplicate-call guard as a fallback when a repeated call has no recoverable result.
 - Tool execution approval semantics and SSE event names are unchanged.
 
