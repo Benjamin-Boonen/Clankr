@@ -410,3 +410,40 @@ class ModelCapabilityFailureTests(SimpleTestCase):
         self.assertEqual(models[0]["name"], "broken-model:latest")
         self.assertEqual(models[0]["caps"], [])
         self.assertIn("size overflows", models[0]["caps_error"])
+
+
+
+class AgentThinkingPrivacyTests(SimpleTestCase):
+    def test_private_thinking_is_not_emitted_to_the_ui(self):
+        class Resp:
+            def iter_lines(self):
+                chunk = {
+                    "message": {
+                        "thinking": "I need to reconstruct the previous answer and quote it.",
+                        "content": "Here is the continuation.",
+                    },
+                    "done": True,
+                    "done_reason": "stop",
+                }
+                return iter([json.dumps(chunk).encode()])
+            def close(self):
+                pass
+
+        def fake_open_chat(payload, **kwargs):
+            if False:
+                yield None
+            self_payload.append(payload)
+            return Resp()
+
+        self_payload = []
+        run = SimpleNamespace(msgs=[{"role": "user", "content": "Continue."}])
+        with (
+            mock.patch.object(ollama, "get_caps", return_value=("completion", "thinking")),
+            mock.patch.object(ollama, "is_loaded", return_value=True),
+            mock.patch.object(ollama, "open_chat", side_effect=fake_open_chat),
+        ):
+            events = list(agent._model_round("test-model", run, allow_thinking=True))
+
+        self.assertFalse(any(kind == "thinking" for kind, _ in events))
+        self.assertIn(("token", "Here is the continuation."), events)
+        self.assertTrue(self_payload[0]["think"])
