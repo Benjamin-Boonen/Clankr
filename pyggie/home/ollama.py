@@ -338,7 +338,7 @@ def _search_web(query, max_results=6):
     raising an exception. Trying explicit providers here keeps that failure inside
     one tool invocation instead of asking the model to rephrase the same search.
     """
-    providers = ("brave", "mojeek", "startpage", "yahoo", "wikipedia")
+    providers = ("duckduckgo", "bing", "yahoo", "wikipedia")
     failures = []
     attempts = (("auto",) + providers)
     for backend in attempts:
