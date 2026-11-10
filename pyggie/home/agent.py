@@ -85,11 +85,11 @@ def _canonical_tool_args(name, args):
             return [normalize(v, key) for v in value]
         if isinstance(value, str):
             if key in {"query", "url", "path", "name"}:
-                return re.sub(r"\\s+", " ", value).strip().casefold()
+                return re.sub(r"\s+", " ", value).strip().casefold()
             if key == "code":
-                return re.sub(r"\\s+", "", value)
+                return re.sub(r"\s+", "", value)
             if key == "command":
-                return re.sub(r"\\s+", " ", value).strip()
+                return re.sub(r"\s+", " ", value).strip()
         return value
     return json.dumps(normalize(args), sort_keys=True, ensure_ascii=False)
 
@@ -125,7 +125,7 @@ def _record_tool_result(run, name, args, result):
     """Persist a compact, reusable result ledger inside AgentRun.msgs (no schema migration)."""
     state = _working_state(run)
     fingerprint = hashlib.sha256(
-        (name + "\\0" + _canonical_tool_args(name, args)).encode("utf-8")
+        (name + "\0" + _canonical_tool_args(name, args)).encode("utf-8")
     ).hexdigest()
     ledger = state["tool_ledger"]
     ledger.append({
@@ -145,7 +145,7 @@ def _prior_tool_result(run, name, args):
     """Return the actual previous result for an equivalent completed call, if available."""
     state = _working_state(run)
     fingerprint = hashlib.sha256(
-        (name + "\\0" + _canonical_tool_args(name, args)).encode("utf-8")
+        (name + "\0" + _canonical_tool_args(name, args)).encode("utf-8")
     ).hexdigest()
     for entry in reversed(state["tool_ledger"]):
         if entry.get("fingerprint") == fingerprint:
@@ -288,7 +288,7 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
     if not ollama.is_loaded(model):
         yield "status", ollama.load_notice(model)
     system = (ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT +
-              f"\\nToday's date: {datetime.date.today():%A %d %B %Y}." +
+              f"\nToday's date: {datetime.date.today():%A %d %B %Y}." +
               _working_state_prompt(run))
     # Persistence metadata is stored in AgentRun.msgs but is not an Ollama chat role.
     transcript = [m for m in run.msgs if not m.get(STATE_MARKER)]
