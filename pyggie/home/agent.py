@@ -1,7 +1,7 @@
 # home/agent.py — Agent mode: loop of model → tools → model … until the task is done.
 # The loop PAUSES (and the HTTP stream ends) whenever a tool needs the user's approval;
 # state lives in the AgentRun row, and /agent/approve/ resumes it.
-import json, os, re, shutil, subprocess, datetime
+import json, os, re, shutil, subprocess, datetime, hashlib
 from pathlib import Path
 from django.conf import settings
 import requests
@@ -68,6 +68,102 @@ def _is_repeat(run, name, args):
                     json.dumps(ollama.parse_args(fn.get("arguments")), sort_keys=True) == key):
                 count += 1
     return count > 1
+
+
+STATE_MARKER = "_pyggie_working_state"
+MAX_LEDGER_ENTRIES = 20
+MAX_LEDGER_RESULT_CHARS = 8000
+
+
+def _canonical_tool_args(name, args):
+    """Stable fingerprint input without changing case-sensitive code or filesystem paths."""
+    def normalize(value, key=""):
+        if isinstance(value, dict):
+            return {k: normalize(v, k) for k, v in sorted(value.items())}
+        if isinstance(value, list):
+            return [normalize(v, key) for v in value]
+        if isinstance(value, str):
+            if key == "query":
+                return re.sub(r"\s+", " ", value).strip().casefold()
+            if key in {"url", "path"}:
+                return value.strip()
+            if key == "name":
+                return value.strip().casefold()
+        return value
+    return json.dumps(normalize(args), sort_keys=True, ensure_ascii=False)
+
+def _state_record(run):
+    for message in run.msgs:
+        if message.get(STATE_MARKER):
+            return message
+    record = {"role": "system", STATE_MARKER: True, "state": {
+        "objective": "", "completed": [], "findings": [], "next_step": "",
+        "tool_ledger": []
+    }}
+    run.msgs.insert(0, record)
+    return record
+
+
+def _working_state(run):
+    record = _state_record(run)
+    state = record.setdefault("state", {})
+    state.setdefault("objective", "")
+    state.setdefault("completed", [])
+    state.setdefault("findings", [])
+    state.setdefault("next_step", "")
+    state.setdefault("tool_ledger", [])
+    if not state["objective"]:
+        first_user = next((m.get("content", "") for m in run.msgs
+                           if m.get("role") == "user" and not m.get(STATE_MARKER)), "")
+        state["objective"] = first_user[:3000]
+    return state
+
+
+def _record_tool_result(run, name, args, result):
+    """Persist a compact, reusable result ledger inside AgentRun.msgs (no schema migration)."""
+    state = _working_state(run)
+    fingerprint = hashlib.sha256(
+        (name + "\0" + _canonical_tool_args(name, args)).encode("utf-8")
+    ).hexdigest()
+    ledger = state["tool_ledger"]
+    ledger.append({
+        "fingerprint": fingerprint, "name": name,
+        "result": str(result)[:MAX_LEDGER_RESULT_CHARS],
+        "ok": not str(result).startswith(("Tool error:", "Plot error:")),
+    })
+    state["tool_ledger"] = ledger[-MAX_LEDGER_ENTRIES:]
+    state["completed"] = (state["completed"] + [name])[-30:]
+    state["findings"] = (state["findings"] + [
+        {"tool": name, "result": str(result)[:1000]}
+    ])[-12:]
+    state["next_step"] = "Use the recorded result to advance the original objective; do not repeat completed work."
+
+
+def _prior_tool_result(run, name, args):
+    """Return the actual previous result for an equivalent completed call, if available."""
+    state = _working_state(run)
+    fingerprint = hashlib.sha256(
+        (name + "\0" + _canonical_tool_args(name, args)).encode("utf-8")
+    ).hexdigest()
+    for entry in reversed(state["tool_ledger"]):
+        if entry.get("fingerprint") == fingerprint:
+            return entry.get("result", "")
+    return None
+
+
+def _working_state_prompt(run):
+    state = _working_state(run)
+    snapshot = {
+        "original_objective": state["objective"],
+        "completed_actions": state["completed"][-15:],
+        "key_findings": state["findings"][-8:],
+        "next_step": state["next_step"],
+        "rule": "Continue from this state. Reuse recorded results; do not redo completed actions."
+    }
+    return "\n\nPERSISTENT TASK STATE (authoritative across model/tool rounds):\n" + json.dumps(
+        snapshot, ensure_ascii=False, separators=(",", ":")
+    )
+
 
 
 def _research_limit_reached(run, name):
@@ -190,8 +286,11 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
     caps = ollama.get_caps(model)
     if not ollama.is_loaded(model):
         yield "status", ollama.load_notice(model)
-    system = ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT + \
-             f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
+    system = (ollama.SYSTEM_PROMPT.split("You have two tools")[0] + AGENT_PROMPT +
+              f"\nToday's date: {datetime.date.today():%A %d %B %Y}." +
+              _working_state_prompt(run))
+    # Persistence metadata is stored in AgentRun.msgs but is not an Ollama chat role.
+    transcript = [m for m in run.msgs if not m.get(STATE_MARKER)]
     pressure = context.context_pressure(run.msgs)
     if pressure["suggest_new_chat"] and not getattr(run, "context_notice_sent", False):
         run.context_notice_sent = True
@@ -199,7 +298,7 @@ def _model_round(model, run, allow_tools=True, allow_thinking=True):
                          "starting a new chat with a handoff summary may improve reliability.")
     payload = {"model": model, "stream": True,
                "options": {"temperature": 0.2, "num_predict": 4096},
-               "messages": [{"role": "system", "content": system}] + _compact_messages(run.msgs)}
+               "messages": [{"role": "system", "content": system}] + _compact_messages(transcript)}
     if "thinking" in caps: payload["think"] = allow_thinking
     if allow_tools and "tools" in caps: payload["tools"] = TOOLS
     resp = yield from ollama.open_chat(payload, timeout=(15, 180))   # grows num_ctx on "exceeds context" errors
@@ -236,10 +335,12 @@ def _process(run, calls):
         calls.pop(0)
         label = next(iter(args.values()), "") if args else ""
         # Block duplicate calls before approval so they cannot trigger another prompt.
-        if _is_repeat(run, name, args):
-            out = ("This exact tool call already appeared in this run and was not executed again. "
-                   "Use the prior result and continue the original task. Retry only after a concrete "
-                   "failure and with a materially changed approach.")
+        prior_result = _prior_tool_result(run, name, args) if name in REPEAT_SAFE else None
+        if prior_result is not None:
+            out = ("REUSED PREVIOUS TOOL RESULT (not re-executed):\n" + prior_result)
+        elif _is_repeat(run, name, args):
+            out = ("This tool call was repeated but its original result is unavailable. "
+                   "Do not repeat it again; continue with the evidence already in the transcript.")
         elif needs_approval(name, args) and name not in run.allowed:
             run.pending = [call] + calls
             yield "approval", {"run_id": run.id, "name": name, "args": args}
@@ -256,6 +357,8 @@ def _process(run, calls):
             yield "tool", {"name": name, "arg": label}
             out = execute(name, args, run)
         run.msgs.append({"role": "tool", "tool_name": name, "content": out})
+        if prior_result is None and not out.startswith("This tool call was repeated"):
+            _record_tool_result(run, name, args, out)
         yield "result", {"name": name, "out": out[:1500]}
         if name == "finish" and run.summary:
             yield "token", f"\n\n**Done:** {run.summary}"
@@ -374,6 +477,7 @@ def resume(run, approve, always=False):
     else:
         out = "The user DENIED this action. Do not retry it; choose another approach or explain."
     run.msgs.append({"role": "tool", "tool_name": name, "content": out})
+    _record_tool_result(run, name, args, out)
     yield "result", {"name": name, "out": out[:1500]}
     if approve and name == "finish" and run.summary:
         yield "token", f"\n\n**Done:** {run.summary}"
