@@ -21,7 +21,7 @@ def _size(messages):
     for message in messages:
         item = dict(message)
         if item.get("images"):
-            item["images"] = ["[image payload: estimated visual tokens]" for _ in item["images"]]
+            item["images"] = ["[IMAGE_PAYLOAD]" * 400 for _ in item["images"]]
         total += len(json.dumps(item, ensure_ascii=False))
     return total
 
