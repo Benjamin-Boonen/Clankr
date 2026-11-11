@@ -167,7 +167,7 @@ def refresh_chat_memory(chat, summarize, recent=RECENT_MESSAGES):
                     detail = attachment.text.split("\0", 1)[-1] if "\0" in attachment.text else ""
                     text += f"\n[Image: {attachment.name}] " + (detail or "Image attached; description unavailable.")
                 else:
-                    text += f"\n[File: {attachment.name}]\\n{attachment.text[:500]}"
+                    text += f"\n[File: {attachment.name}]\n{attachment.text[:500]}"
             payload.append({"role": message.role, "content": text[:1000]})
 
         updated = summarize(working_summary, payload)
