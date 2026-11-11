@@ -9,7 +9,7 @@ from .models import Chat, Message, AgentRun, Artifact
 from . import agent, files, plots
 from django.http import HttpResponse
 from django.core.cache import cache
-from . import ollama
+from . import ollama, context
 
 
 def _stop_key(chat_id):
@@ -39,7 +39,20 @@ def _prepare_history(chat, model, vision_model):
             files._describe(a, vision_model)
         except Exception as e:
             errors[a.id] = ollama.friendly_error(e)       # build_history puts this in the prompt
-    return files.build_history(chat, ollama.get_caps(model), vision_model, errors)
+    # Refresh an incremental semantic checkpoint before building the prompt. If the
+    # summarizer fails, continue with the previous checkpoint and full recent history.
+    summary, through_id, changed = context.load_chat_memory(chat)[:2] + (False,)
+    try:
+        summary, through_id, changed = context.refresh_chat_memory(
+            chat, lambda previous, turns: ollama.summarize_history(model, previous, turns))
+    except Exception as e:
+        yield 'status', f"Conversation memory update skipped: {ollama.friendly_error(e)}"
+    if changed:
+        yield 'status', "Updated compact conversation memory; older turns remain saved."
+    history = files.build_history(chat, ollama.get_caps(model), vision_model, errors,
+                                  after_id=through_id)
+    memory = context.memory_message(summary)
+    return ([memory] if memory else []) + history
 
 
 def _as_sse(gen):
@@ -63,7 +76,7 @@ def get_chat(request, chat_id):
     chat = get_object_or_404(Chat, id=chat_id, user=request.user)
     messages = [{'role': m.role, 'content': m.content, 'created_at': m.created_at,
                  'files': [a.name for a in m.attachments.all()]}
-                for m in chat.messages.prefetch_related('attachments')]
+                for m in chat.messages.filter(role__in=['user', 'ai']).prefetch_related('attachments')]
     arts = list(chat.artifacts.values('id', 'title', 'kind'))
     return JsonResponse({'id': chat.id, 'title': chat.title, 'messages': messages, 'artifacts': arts})
 
