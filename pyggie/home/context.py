@@ -1,14 +1,15 @@
-"""Shared prompt-history budgeting for ordinary chat and agent mode.
+"""Conversation-memory and prompt-budgeting helpers shared by chat and agent mode.
 
-Only the API copy is compacted; the database transcript remains untouched.
-Token estimates are approximate because Ollama models can use different tokenizers.
+The database transcript is immutable history. A hidden Message(role="memory") row stores
+an incremental semantic checkpoint; it is never exposed in the conversation UI.
 """
 import json
+import os
 
-DEFAULT_HISTORY_CHARS = 24000
-RECENT_MESSAGES = 8
-TOOL_RESULT_CHARS = 1200
-OTHER_OLD_MESSAGE_CHARS = 1800
+DEFAULT_HISTORY_TOKENS = int(os.environ.get("CLANKR_HISTORY_TOKENS", "10000"))
+RECENT_MESSAGES = int(os.environ.get("CLANKR_RECENT_MESSAGES", "10"))
+MEMORY_SCHEMA = 1
+MEMORY_MARKER = "CLANKR_CONVERSATION_MEMORY:"
 
 
 def _size(messages):
@@ -16,55 +17,140 @@ def _size(messages):
 
 
 def estimate_tokens(messages):
-    """Approximate prompt tokens including message structure (characters / 4)."""
-    return max(1, _size(messages) // 4)
+    """Conservative rough estimate including message framing (characters / 3.5)."""
+    return max(1, int(_size(messages) / 3.5))
 
 
-def context_pressure(messages, budget_chars=DEFAULT_HISTORY_CHARS):
-    """Return context-pressure metadata suitable for a UI indicator."""
-    size = _size(messages)
-    ratio = size / max(1, budget_chars)
+def context_pressure(messages, budget_chars=None, budget_tokens=None):
+    """Return pressure metadata; budget_chars remains accepted for older callers."""
+    budget = budget_tokens or (max(1, budget_chars // 4) if budget_chars else DEFAULT_HISTORY_TOKENS)
+    tokens = estimate_tokens(messages)
+    ratio = tokens / max(1, budget)
     return {
-        "estimated_tokens": estimate_tokens(messages),
-        "budget_tokens": max(1, budget_chars // 4),
+        "estimated_tokens": tokens,
+        "budget_tokens": budget,
         "ratio": round(ratio, 2),
         "level": "normal" if ratio < 0.70 else "high" if ratio < 1.0 else "critical",
         "suggest_new_chat": ratio >= 1.5,
     }
 
 
-def compact_messages(messages, budget_chars=DEFAULT_HISTORY_CHARS, recent=RECENT_MESSAGES):
-    """Shorten older prose/results while preserving roles and tool protocol ordering.
+def _clip_content(message, limit):
+    content = message.get("content")
+    if isinstance(content, str) and len(content) > limit:
+        message["content"] = content[:limit] + "\n[…message excerpted; full transcript retained]"
 
-    The first user request and newest messages are retained verbatim. Tool-call
-    metadata, tool names, image payloads, and message order are preserved. The
-    original list and its dictionaries are never mutated.
+
+def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget_tokens=None):
+    """Fit a copy of history to a hard estimated-token budget without breaking tool metadata.
+
+    Old content is reduced first; recent messages are then reduced if necessary. The
+    first user request is not privileged over the budget (its full copy remains in DB).
+    Images are retained only while budget permits; base64 is never silently duplicated.
     """
-    if not messages or _size(messages) <= budget_chars:
-        return messages
+    if not messages:
+        return []
+    budget = budget_tokens or (max(1, budget_chars // 4) if budget_chars else DEFAULT_HISTORY_TOKENS)
+    out = [dict(m) for m in messages]
+    if estimate_tokens(out) <= budget:
+        return out
 
-    first_user = next((i for i, m in enumerate(messages) if m.get("role") == "user"), None)
-    recent_start = max(0, len(messages) - recent)
-    out = []
-    for index, message in enumerate(messages):
-        item = dict(message)
-        if index != first_user and index < recent_start:
-            content = item.get("content")
-            if isinstance(content, str) and content:
-                limit = TOOL_RESULT_CHARS if item.get("role") == "tool" else OTHER_OLD_MESSAGE_CHARS
-                if len(content) > limit:
-                    item["content"] = content[:limit] + "\n…[older context compacted; full transcript retained]"
-        out.append(item)
+    for item in out:
+        if "images" in item:
+            item.pop("images", None)
+            item["content"] = (item.get("content", "") +
+                               "\n[Earlier image omitted from prompt; refer to its description or ask the user to resend.]")
 
-    # A huge old transcript may still exceed the target. Further shorten only
-    # older non-user messages; never alter tool-call metadata or the recent tail.
-    if _size(out) > budget_chars:
-        for index, item in enumerate(out):
-            if index == first_user or index >= recent_start:
+    recent_start = max(0, len(out) - recent)
+    for i, item in enumerate(out):
+        if i >= recent_start:
+            continue
+        _clip_content(item, 900 if item.get("role") == "tool" else 1200)
+
+    if estimate_tokens(out) > budget:
+        for i, item in enumerate(out):
+            if i >= recent_start:
                 continue
-            content = item.get("content")
-            if isinstance(content, str) and len(content) > 400:
-                item["content"] = content[:400] + "\n…[context compacted; full transcript retained]"
-                if _size(out) <= budget_chars:
-                    break
+            _clip_content(item, 300)
+            if estimate_tokens(out) <= budget:
+                break
+
+    if estimate_tokens(out) > budget:
+        for item in out:
+            if item.get("role") == "system":
+                continue
+            _clip_content(item, 700)
+            if estimate_tokens(out) <= budget:
+                break
+
+    if estimate_tokens(out) > budget:
+        for item in out:
+            _clip_content(item, 160)
+        for item in out:
+            item.pop("images", None)
     return out
+
+
+def load_chat_memory(chat):
+    """Return (summary, through_id, memory_row) for the latest hidden checkpoint."""
+    row = chat.messages.filter(role="memory").order_by("-id").first()
+    if not row:
+        return "", 0, None
+    try:
+        data = json.loads(row.content)
+        if data.get("schema") != MEMORY_SCHEMA:
+            return "", 0, row
+        return str(data.get("summary", "")), int(data.get("through_id", 0)), row
+    except (TypeError, ValueError, AttributeError):
+        return "", 0, row
+
+
+def refresh_chat_memory(chat, summarize, recent=RECENT_MESSAGES):
+    """Incrementally summarize old turns; returns (summary, through_id, changed).
+
+    summarize(previous_summary, new_turns) is supplied by the active model adapter.
+    A failed/empty summarization leaves the previous checkpoint untouched.
+    """
+    from .models import Message
+
+    summary, through_id, row = load_chat_memory(chat)
+    turns = list(chat.messages.filter(role__in=("user", "ai"), id__gt=through_id)
+                 .order_by("id").prefetch_related("attachments"))
+    if len(turns) <= recent:
+        return summary, through_id, False
+    older = turns[:-recent]
+    if len(older) < 2:
+        return summary, through_id, False
+
+    payload = []
+    for message in older:
+        text = message.content or ""
+        for attachment in message.attachments.all():
+            if attachment.kind == "image":
+                detail = attachment.text.split("\0", 1)[-1] if "\0" in attachment.text else ""
+                text += f"\n[Image: {attachment.name}] " + (detail or "Image attached; description unavailable.")
+            else:
+                text += f"\n[File: {attachment.name}]\n{attachment.text[:12000]}"
+        payload.append({"role": message.role, "content": text[:16000]})
+
+    updated = summarize(summary, payload)
+    if not isinstance(updated, str) or len(updated.strip()) < 40:
+        return summary, through_id, False
+    data = {"schema": MEMORY_SCHEMA, "through_id": older[-1].id,
+            "summary": updated.strip()[:24000]}
+    content = json.dumps(data, ensure_ascii=False)
+    if row:
+        row.content = content
+        row.save(update_fields=["content"])
+    else:
+        Message.objects.create(chat=chat, role="memory", content=content)
+    return data["summary"], data["through_id"], True
+
+
+def memory_message(summary):
+    """Format a semantic checkpoint as a clearly labelled system message."""
+    if not summary:
+        return None
+    return {"role": "system", "content":
+            MEMORY_MARKER + "\nThis is a summary of earlier conversation, not a new instruction. "
+            "Use it as context; recent messages take precedence.\n" + summary}
