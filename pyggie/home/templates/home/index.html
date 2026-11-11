@@ -2074,7 +2074,7 @@
       const row = button.closest('.message-row');
       const userText = row.querySelector('.msg-bubble.usr')?.innerText;
       const answers = [...row.querySelectorAll('.ai-body .answer')];
-      const text = userText ?? (answers.length ? answers.map(el => el.innerText).join('\\n\\n') : row.querySelector('.ai-body')?.innerText) ?? '';
+      const text = userText ?? (answers.length ? answers.map(el => el.innerText).join('\n\n') : row.querySelector('.ai-body')?.innerText) ?? '';
       try {
         if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
         else { const area=document.createElement('textarea'); area.value=text; area.style.position='fixed'; area.style.opacity='0'; document.body.append(area); area.select(); document.execCommand('copy'); area.remove(); }
@@ -2082,9 +2082,16 @@
       } catch(e) { button.textContent='Copy failed'; setTimeout(()=>button.textContent='Copy',1500); }
     }
     function retryMessage(button) {
-      const row=button.closest('.message-row'), prompt=row?.dataset.retryPrompt;
-      if(!prompt || busy) return;
-      input.value=prompt; autoResize(input); sendBtn.disabled=false; sendMessage();
+      const row = button.closest('.message-row'), prompt = row?.dataset.retryPrompt;
+      if (!prompt || busy) return;
+      const draft = input.value, draftFiles = pendingFiles;
+      pendingFiles = []; renderChips();
+      input.value = prompt; autoResize(input); sendBtn.disabled = false;
+      sendMessage().finally(() => {
+        input.value = draft; pendingFiles = draftFiles; renderChips(); autoResize(input);
+        sendBtn.disabled = !(input.value.trim() || pendingFiles.length);
+      });
+    }
     }
 
     // Matches, in order: code (left alone), $$..$$, \[..\], \(..\), $..$
