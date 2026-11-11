@@ -86,10 +86,20 @@ def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget
                 break
 
     if estimate_tokens(out) > budget:
+        # Allocate the remaining budget across all messages instead of assuming
+        # the recent tail is small. Leave room for role/framing metadata.
+        per_message = max(24, int((budget * 3.5 - 120 * len(out)) / max(1, len(out))))
         for item in out:
-            _clip_content(item, 160)
-        for item in out:
+            _clip_content(item, per_message)
             item.pop("images", None)
+        # If protocol metadata alone is oversized, discard oldest messages while
+        # keeping the newest user/assistant context and all remaining roles intact.
+        while len(out) > 2 and estimate_tokens(out) > budget:
+            remove_at = next((i for i, m in enumerate(out[:-2])
+                              if m.get("role") != "system"), None)
+            if remove_at is None:
+                break
+            out.pop(remove_at)
     return out
 
 
