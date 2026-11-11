@@ -101,6 +101,16 @@ def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget
             _clip_content(item, per_message)
             if index < recent_start:
                 item.pop("images", None)
+        # Keep the newest image first; drop older recent image payloads only when
+        # their visual-token allowance still prevents the prompt from fitting.
+        if estimate_tokens(out) > budget:
+            for item in out[:-1]:
+                if "images" in item:
+                    item.pop("images", None)
+                    if estimate_tokens(out) <= budget:
+                        break
+        if estimate_tokens(out) > budget and out and "images" in out[-1]:
+            out[-1].pop("images", None)
         # If protocol metadata alone is oversized, discard oldest messages while
         # keeping the newest user/assistant context and all remaining roles intact.
         while len(out) > 2 and estimate_tokens(out) > budget:
