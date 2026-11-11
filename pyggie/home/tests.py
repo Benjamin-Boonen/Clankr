@@ -13,7 +13,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
-from . import agent, ollama, plots
+from . import agent, ollama, plots, context
 from .agent import _compact_messages, _is_repeat, _research_limit_reached
 from .models import Artifact, Chat
 
@@ -30,13 +30,33 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertEqual(len(compacted), len(messages))
         self.assertEqual(compacted[-1], messages[-1])
         self.assertEqual(compacted[-2], messages[-2])
-        # The original user objective is intentionally preserved verbatim.
-        # Older tool output is the content that should be compacted instead.
-        self.assertEqual(compacted[0], messages[0])
+        # The original request is retained in the database, not privileged over
+        # the prompt budget. Both old user and tool bodies may be excerpted.
+        self.assertNotEqual(compacted[0], messages[0])
+        self.assertIn("excerpted", compacted[0]["content"])
         self.assertEqual(compacted[1]["role"], "tool")
         self.assertEqual(compacted[1]["tool_name"], "web_search")
-        self.assertIn("older context compacted", compacted[1]["content"])
+        self.assertIn("excerpted", compacted[1]["content"])
         self.assertLess(len(compacted[1]["content"]), len(messages[1]["content"]))
+
+
+    def test_token_budget_trims_an_oversized_recent_tail(self):
+        messages = [{"role": "user", "content": "recent " + ("x" * 12000)}
+                    for _ in range(12)]
+        compacted = context.compact_messages(messages, budget_tokens=500, recent=10)
+        self.assertLessEqual(context.estimate_tokens(compacted), 500)
+        self.assertEqual(len(compacted), len(messages))
+
+    def test_compaction_does_not_mutate_source_or_tool_metadata(self):
+        messages = [{"role": "assistant", "content": "x" * 10000,
+                     "tool_calls": [{"id": "call-1", "function": {
+                         "name": "run_python", "arguments": {"code": "print(1)"}}}]},
+                    {"role": "tool", "tool_name": "run_python", "content": "y" * 10000}]
+        original = json.loads(json.dumps(messages))
+        compacted = context.compact_messages(messages, budget_tokens=300)
+        self.assertEqual(messages, original)
+        self.assertEqual(compacted[0]["tool_calls"], messages[0]["tool_calls"])
+        self.assertEqual(compacted[1]["tool_name"], "run_python")
 
     def test_repeat_guard_detects_same_read_only_call(self):
         class Run:
