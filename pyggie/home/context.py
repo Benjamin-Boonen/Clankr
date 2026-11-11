@@ -15,7 +15,15 @@ MEMORY_MARKER = "CLANKR_CONVERSATION_MEMORY:"
 
 
 def _size(messages):
-    return sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
+    # Base64 image bytes are not tokenized as their literal character sequence by
+    # multimodal models. Reserve an approximate visual-token allowance instead.
+    total = 0
+    for message in messages:
+        item = dict(message)
+        if item.get("images"):
+            item["images"] = ["[image payload: estimated visual tokens]" for _ in item["images"]]
+        total += len(json.dumps(item, ensure_ascii=False))
+    return total
 
 
 def estimate_tokens(messages):
@@ -57,8 +65,8 @@ def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget
     if estimate_tokens(out) <= budget:
         return out
 
-    for item in out:
-        if "images" in item:
+    for index, item in enumerate(out):
+        if index < recent_start and "images" in item:
             item.pop("images", None)
             item["content"] = (item.get("content", "") +
                                "\n[Earlier image omitted from prompt; refer to its description or ask the user to resend.]")
@@ -89,9 +97,10 @@ def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget
         # Allocate the remaining budget across all messages instead of assuming
         # the recent tail is small. Leave room for role/framing metadata.
         per_message = max(24, int((budget * 3.5 - 120 * len(out)) / max(1, len(out))))
-        for item in out:
+        for index, item in enumerate(out):
             _clip_content(item, per_message)
-            item.pop("images", None)
+            if index < recent_start:
+                item.pop("images", None)
         # If protocol metadata alone is oversized, discard oldest messages while
         # keeping the newest user/assistant context and all remaining roles intact.
         while len(out) > 2 and estimate_tokens(out) > budget:
