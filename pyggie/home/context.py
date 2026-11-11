@@ -7,6 +7,8 @@ import json
 import os
 
 DEFAULT_HISTORY_TOKENS = int(os.environ.get("CLANKR_HISTORY_TOKENS", "10000"))
+# Compatibility for agent.py and older callers that still pass a character budget.
+DEFAULT_HISTORY_CHARS = DEFAULT_HISTORY_TOKENS * 4
 RECENT_MESSAGES = int(os.environ.get("CLANKR_RECENT_MESSAGES", "10"))
 MEMORY_SCHEMA = 1
 MEMORY_MARKER = "CLANKR_CONVERSATION_MEMORY:"
