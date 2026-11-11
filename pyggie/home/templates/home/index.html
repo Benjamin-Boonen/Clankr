@@ -1842,7 +1842,7 @@
       msgs.innerHTML = '';
       let previousUserPrompt = '';
       data.messages.forEach(m => {
-        if (m.role === 'user') { previousUserPrompt = m.files?.length ? '' : m.content; addMessage(m.content + (m.files && m.files.length ? '\\n\\n⊕ ' + m.files.join(', ') : ''), 'user'); }
+        if (m.role === 'user') { previousUserPrompt = m.files?.length ? '' : m.content; addMessage(m.content + (m.files && m.files.length ? '\n\n⊕ ' + m.files.join(', ') : ''), 'user'); }
         else { addMessage(m.content, 'ai', previousUserPrompt); previousUserPrompt = ''; }
       });      (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
       currentChatId = data.id;
