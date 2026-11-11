@@ -63,7 +63,7 @@ def images_to_describe(chat, vision_model):
             if a.kind == "image" and not a.text.startswith(vision_model + "\0")]
 
 
-def build_history(chat, caps=(), vision_model="", errors=None):
+def build_history(chat, caps=(), vision_model="", errors=None, after_id=0):
     """Chat history for the model, with attachments folded into the user messages.
 
     Images: if `vision_model` is set, it describes each image first and the chat model only
@@ -72,7 +72,7 @@ def build_history(chat, caps=(), vision_model="", errors=None):
     (so a failing vision model is not retried within the same request)."""
     errors = errors or {}
     out = []
-    for m in chat.messages.filter(role__in=["user", "ai"]).prefetch_related("attachments"):
+    for m in chat.messages.filter(role__in=["user", "ai"], id__gt=after_id).prefetch_related("attachments"):
         if m.role == "ai":
             out.append({"role": "assistant", "content": m.content}); continue
         content, images = m.content, []

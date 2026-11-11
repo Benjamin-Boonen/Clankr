@@ -13,9 +13,9 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.test import SimpleTestCase, TestCase
 
-from . import agent, ollama, plots
+from . import agent, ollama, plots, context
 from .agent import _compact_messages, _is_repeat, _research_limit_reached
-from .models import Artifact, Chat
+from .models import Artifact, Chat, Message
 
 
 class AgentContinuityTests(SimpleTestCase):
@@ -30,13 +30,39 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertEqual(len(compacted), len(messages))
         self.assertEqual(compacted[-1], messages[-1])
         self.assertEqual(compacted[-2], messages[-2])
-        # The original user objective is intentionally preserved verbatim.
-        # Older tool output is the content that should be compacted instead.
-        self.assertEqual(compacted[0], messages[0])
+        # The original request is retained in the database, not privileged over
+        # the prompt budget. Both old user and tool bodies may be excerpted.
+        self.assertNotEqual(compacted[0], messages[0])
+        self.assertIn("excerpted", compacted[0]["content"])
         self.assertEqual(compacted[1]["role"], "tool")
         self.assertEqual(compacted[1]["tool_name"], "web_search")
-        self.assertIn("older context compacted", compacted[1]["content"])
+        self.assertIn("excerpted", compacted[1]["content"])
         self.assertLess(len(compacted[1]["content"]), len(messages[1]["content"]))
+
+
+    def test_token_budget_trims_an_oversized_recent_tail(self):
+        messages = [{"role": "user", "content": "recent " + ("x" * 12000)}
+                    for _ in range(12)]
+        compacted = context.compact_messages(messages, budget_tokens=500, recent=10)
+        self.assertLessEqual(context.estimate_tokens(compacted), 500)
+        self.assertEqual(len(compacted), len(messages))
+
+    def test_recent_image_payloads_are_not_counted_as_base64_text(self):
+        messages = [{"role": "user", "content": "describe this", "images": ["A" * 200000]}]
+        self.assertLess(context.estimate_tokens(messages), 2000)
+        compacted = context.compact_messages(messages, budget_tokens=2500)
+        self.assertIn("images", compacted[-1])
+
+    def test_compaction_does_not_mutate_source_or_tool_metadata(self):
+        messages = [{"role": "assistant", "content": "x" * 10000,
+                     "tool_calls": [{"id": "call-1", "function": {
+                         "name": "run_python", "arguments": {"code": "print(1)"}}}]},
+                    {"role": "tool", "tool_name": "run_python", "content": "y" * 10000}]
+        original = json.loads(json.dumps(messages))
+        compacted = context.compact_messages(messages, budget_tokens=300)
+        self.assertEqual(messages, original)
+        self.assertEqual(compacted[0]["tool_calls"], messages[0]["tool_calls"])
+        self.assertEqual(compacted[1]["tool_name"], "run_python")
 
     def test_repeat_guard_detects_same_read_only_call(self):
         class Run:
@@ -63,6 +89,40 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertTrue(_research_limit_reached(Run(), "web_search"))
         self.assertFalse(_research_limit_reached(Run(), "fetch_page"))
         self.assertFalse(_research_limit_reached(Run(), "run_python"))
+
+
+class ConversationMemoryTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="memory-test")
+        self.chat = Chat.objects.create(user=self.user, title="Memory test")
+
+    def test_old_turns_become_a_hidden_incremental_checkpoint(self):
+        for i in range(12):
+            Message.objects.create(chat=self.chat, role="user" if i % 2 == 0 else "ai",
+                                   content=f"Important conversation detail {i}")
+        calls = []
+
+        def summarize(previous, turns):
+            calls.append((previous, turns))
+            return "User objective: preserve the important conversation details.\nDecisions: details 0-1."
+
+        summary, through_id, changed = context.refresh_chat_memory(self.chat, summarize)
+        self.assertTrue(changed)
+        self.assertEqual(through_id, 2)
+        self.assertIn("User objective", summary)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.chat.messages.filter(role="memory").count(), 1)
+
+    def test_memory_checkpoint_is_reused_when_no_new_batch_is_ready(self):
+        for i in range(12):
+            Message.objects.create(chat=self.chat, role="user" if i % 2 == 0 else "ai",
+                                   content=f"Turn {i}")
+        context.refresh_chat_memory(self.chat, lambda previous, turns: "A sufficiently long summary of the first turns.")
+        summary, through_id, changed = context.refresh_chat_memory(
+            self.chat, lambda previous, turns: self.fail("should not summarize again"))
+        self.assertFalse(changed)
+        self.assertTrue(summary)
+        self.assertEqual(through_id, 2)
 
 
 class PlotInstructionTests(SimpleTestCase):
