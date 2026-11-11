@@ -153,23 +153,31 @@ def refresh_chat_memory(chat, summarize, recent=RECENT_MESSAGES):
     if len(older) < 2:
         return summary, through_id, False
 
-    payload = []
-    per_turn_chars = max(300, 30000 // max(1, len(older)))
-    for message in older:
-        text = message.content or ""
-        for attachment in message.attachments.all():
-            if attachment.kind == "image":
-                detail = attachment.text.split("\0", 1)[-1] if "\0" in attachment.text else ""
-                text += f"\n[Image: {attachment.name}] " + (detail or "Image attached; description unavailable.")
-            else:
-                text += f"\n[File: {attachment.name}]\n{attachment.text[:per_turn_chars // 2]}"
-        payload.append({"role": message.role, "content": text[:per_turn_chars]})
+    # Summarize in bounded batches. A single huge request would recreate the very
+    # context-window problem this checkpoint is intended to solve.
+    working_summary = summary
+    batch_size = 30
+    for offset in range(0, len(older), batch_size):
+        batch = older[offset:offset + batch_size]
+        payload = []
+        for message in batch:
+            text = message.content or ""
+            for attachment in message.attachments.all():
+                if attachment.kind == "image":
+                    detail = attachment.text.split("\\0", 1)[-1] if "\\0" in attachment.text else ""
+                    text += f"\\n[Image: {attachment.name}] " + (detail or "Image attached; description unavailable.")
+                else:
+                    text += f"\\n[File: {attachment.name}]\\n{attachment.text[:500]}"
+            payload.append({"role": message.role, "content": text[:1000]})
 
-    updated = summarize(summary, payload)
-    if not isinstance(updated, str) or len(updated.strip()) < 40:
-        return summary, through_id, False
+        updated = summarize(working_summary, payload)
+        if not isinstance(updated, str) or len(updated.strip()) < 40:
+            # Do not advance the checkpoint unless every batch was summarized.
+            return summary, through_id, False
+        working_summary = updated.strip()[:24000]
+
     data = {"schema": MEMORY_SCHEMA, "through_id": older[-1].id,
-            "summary": updated.strip()[:24000]}
+            "summary": working_summary}
     content = json.dumps(data, ensure_ascii=False)
     if row:
         row.content = content
