@@ -192,6 +192,7 @@ def summarize_history(model, previous_summary, turns):
         f"{OLLAMA_BASE}/api/chat", timeout=180,
         json={"model": model, "stream": False,
               "options": {"temperature": 0.1, "num_predict": 1800},
+              "think": False,
               "messages": [{"role": "user", "content": prompt}]})
     _check(response)
     return (response.json().get("message", {}).get("content") or "").strip()
