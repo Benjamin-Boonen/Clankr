@@ -169,6 +169,34 @@ VISION_PROMPT = (
 )
 
 
+def summarize_history(model, previous_summary, turns):
+    """Create an incremental semantic checkpoint using the active local model.
+
+    This is a separate, tool-free request. It must never mutate or replace the source
+    transcript; callers persist the result only after a successful response.
+    """
+    transcript = json.dumps(turns, ensure_ascii=False, separators=(",", ":"))
+    prompt = (
+        "Update the conversation memory below using the new chronological turns. "
+        "Return ONLY the updated memory in compact Markdown, not a reply to the user. "
+        "Preserve the user's goals, explicit constraints/preferences, decisions, corrections, "
+        "important facts, named entities, code/API details, completed work, unresolved issues, "
+        "and the exact next step where relevant. Remove repetition and obsolete transient details. "
+        "Clearly distinguish confirmed facts from hypotheses. Never invent missing information. "
+        "Keep useful technical specifics; do not retain greetings or conversational filler. "
+        "Aim for 1,500-3,000 words maximum, shorter when possible.\n\n"
+        "EXISTING MEMORY:\n" + (previous_summary or "(none)") +
+        "\n\nNEW TURNS (JSON):\n" + transcript
+    )
+    response = requests.post(
+        f"{OLLAMA_BASE}/api/chat", timeout=180,
+        json={"model": model, "stream": False,
+              "options": {"temperature": 0.1, "num_predict": 1800},
+              "messages": [{"role": "user", "content": prompt}]})
+    _check(response)
+    return (response.json().get("message", {}).get("content") or "").strip()
+
+
 def is_loaded(model):
     """True if Ollama already holds this model in memory (so the first reply is fast).
     Any error counts as loaded: we only announce a slow load when we are sure."""
