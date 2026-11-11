@@ -1,5 +1,20 @@
 # Clank.r changes — this patch (agent: Perplexity Computer session, 2026-10-24)
 
+## 2026-11-11 — Message actions and AI family labels
+
+**UI change (branch: `ui/message-actions-ai-family-thought`)** — the message header now uses the selected model's family label instead of the generic `ai` label. Message actions are available on hover/focus on desktop and always visible on touch layouts.
+
+- **Primary file:** `pyggie/home/templates/home/index.html` (CSS, Django template markup and inline JavaScript; no backend or migration).
+- **AI label:** read from the selected model option's `data-family-label`, so changing the model family updates new and streamed message headers. Existing conversation messages use the currently selected family when rendered.
+- **Copy:** copies the user message or assistant answer text; for streamed answers, copies answer blocks rather than the hidden thought/tool chain.
+- **Retry:** re-sends the preceding user prompt from the assistant message. Retry is disabled when the original user turn included attachments because the browser no longer has the original file objects after reload/send.
+- **Thought chain:** `<details class="think">` is now closed when created; users can still expand it manually.
+- **Mobile:** action controls remain visible and meet the 36px touch-target convention. Keep this override inside the final mobile CSS block.
+- **Multi-agent note:** keep the family label derived from `modelSelect` metadata (do not hardcode provider names); keep action handlers in the same inline script as `sendMessage`; if message rendering is moved, preserve the `data-retry-prompt` relationship and attachment guard.
+
+**Verification needed:** run `python manage.py test home`, then check desktop hover/focus, touch visibility, copy for user/assistant messages, retry with and without attachments, model-family switching, and that thought details start collapsed. No browser test has been run for this change yet.
+
+
 > **Auto context-window growth (Claude, 2026-11-07)** — Ollama's "request (N tokens) exceeds the available context size (4096 tokens)" 400 is now caught; `num_ctx` is raised and the request retried, with a `status` message. Full handoff: `CONTEXT_AUTO_RESIZE.md`.
 > Files: `home/ollama.py` (`open_chat`, `next_num_ctx`, `parse_ctx_error`), `home/agent.py` (`_model_round`), `home/test_ctx_resize.py`. Env: `CLANKR_MAX_NUM_CTX` (default 32768).
 
