@@ -135,6 +135,7 @@ def refresh_chat_memory(chat, summarize, recent=RECENT_MESSAGES):
         return summary, through_id, False
 
     payload = []
+    per_turn_chars = max(300, 30000 // max(1, len(older)))
     for message in older:
         text = message.content or ""
         for attachment in message.attachments.all():
@@ -142,8 +143,8 @@ def refresh_chat_memory(chat, summarize, recent=RECENT_MESSAGES):
                 detail = attachment.text.split("\0", 1)[-1] if "\0" in attachment.text else ""
                 text += f"\n[Image: {attachment.name}] " + (detail or "Image attached; description unavailable.")
             else:
-                text += f"\n[File: {attachment.name}]\n{attachment.text[:12000]}"
-        payload.append({"role": message.role, "content": text[:16000]})
+                text += f"\n[File: {attachment.name}]\n{attachment.text[:per_turn_chars // 2]}"
+        payload.append({"role": message.role, "content": text[:per_turn_chars]})
 
     updated = summarize(summary, payload)
     if not isinstance(updated, str) or len(updated.strip()) < 40:
