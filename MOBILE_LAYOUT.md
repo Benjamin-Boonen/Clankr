@@ -65,3 +65,8 @@ real models, and the particle background's battery cost on phones.
 
 `python manage.py runserver --noreload` keeps Django's template cache: after editing `index.html` restart the server, or you
 will be testing the old page. (Plain `runserver` reloads by itself.)
+
+
+## Message action controls (2026-11-11)
+
+Desktop message actions (Copy / Retry) appear on row hover or keyboard focus. On touch layouts they are always visible; keep the visibility override and 36px minimum touch target inside the final mobile CSS block. Retry is intentionally disabled for assistant responses whose preceding user turn contained attachments, because original file objects are not retained when a conversation is reloaded.

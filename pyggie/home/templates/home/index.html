@@ -511,7 +511,7 @@
     }
 
     .message-row.user .msg-bubble {
-      max-width: 85%;
+      max-width: 100%;
     }
 
     .message-row.user .msg-avatar {
@@ -527,6 +527,14 @@
       font-size: 14.5px;
       line-height: 1.65;
     }
+    .message-content {min-width:0; max-width:100%}
+    .message-actions {display:flex; gap:6px; margin-top:6px; opacity:0; pointer-events:none; transition:opacity .15s ease}
+    .message-row:hover .message-actions, .message-row:focus-within .message-actions {opacity:1; pointer-events:auto}
+    .message-actions button {display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--muted); cursor:pointer; font:11px var(--font-mono)}
+    .message-actions button:hover:not(:disabled) {color:var(--accent); border-color:var(--border2); background:var(--surface2)}
+    .message-actions button:disabled {opacity:.4; cursor:not-allowed}
+    .message-row.user .message-content {max-width:85%}
+    .message-row.user .message-actions {justify-content:flex-end}
 
     .ai-body {
       /* Anthropic-style: the AI's text is document body, not a chat bubble */
@@ -1283,7 +1291,10 @@
       .messages {padding: 14px 0 8px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch}
       .message-row {padding: 0 14px; margin-bottom: 22px}
       .message-row.user .msg-avatar {display: none}
-      .message-row.user .msg-bubble {max-width: 94%; padding: 11px 14px; overflow-wrap: anywhere}
+      .message-row.user .message-content {max-width:94%; min-width:0}
+      .message-row.user .msg-bubble {max-width:100%; padding:11px 14px; overflow-wrap:anywhere}
+      .message-actions {opacity:1; pointer-events:auto}
+      .message-actions button {min-height:36px; padding:6px 10px}
       .msg-meta {gap: 10px; font-size: 13px}
       .ai-body {overflow-wrap: anywhere}
       .ai-body table {display: block; max-width: 100%; overflow-x: auto; overflow-wrap: normal}   /* 'anywhere' would shrink columns to 1 character */
@@ -1829,8 +1840,11 @@
       const data = await resp.json();
 
       msgs.innerHTML = '';
-      data.messages.forEach(m => addMessage(m.content + (m.files && m.files.length ? '\n\n⊕ ' + m.files.join(', ') : ''), m.role === 'user' ? 'user' : 'ai'));
-      (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
+      let previousUserPrompt = '';
+      data.messages.forEach(m => {
+        if (m.role === 'user') { previousUserPrompt = m.files?.length ? '' : m.content; addMessage(m.content + (m.files && m.files.length ? '\n\n⊕ ' + m.files.join(', ') : ''), 'user'); }
+        else { addMessage(m.content, 'ai', previousUserPrompt); previousUserPrompt = ''; }
+      });      (data.artifacts || []).forEach(a => {const b = addEmptyAiBubble(); b.append(artifactFrame(a));});
       currentChatId = data.id;
       setActive(data.id);
       msgs.scrollTop = msgs.scrollHeight;
@@ -2028,23 +2042,25 @@
       };
     }
 
-    function addMessage(text, role) {
+    function addMessage(text, role, retryPrompt = '') {
       if (empty) empty.style.display = 'none';
       const row = document.createElement('div');
       if (role === 'user') {
         row.className = 'message-row user';
         row.innerHTML = `
-        <div class="msg-bubble usr">${escHtml(text)}</div>
+        <div class="message-content"><div class="msg-bubble usr">${escHtml(text)}</div>
+          <div class="message-actions"><button type="button" onclick="copyMessage(this)" aria-label="Copy message">Copy</button></div></div>
         <div class="msg-avatar usr">${escHtml(userInitial)}</div>
       `;
       } else {
         row.className = 'message-row';
+        row.dataset.retryPrompt = retryPrompt;
         row.innerHTML = `
-        <div class="msg-meta">
-          <div class="msg-avatar ai done">${AI_ICON}</div>
-          ai <span class="status done"></span>
-        </div>
+        <div class="msg-meta"><div class="msg-avatar ai done">${AI_ICON}</div>
+          ${escHtml(getAiFamilyName())} <span class="status done"></span></div>
         <div class="ai-body">${renderMarkdown(text)}</div>
+        <div class="message-actions"><button type="button" onclick="retryMessage(this)" aria-label="Retry response" ${retryPrompt ? '' : 'disabled'}>Retry</button>
+          <button type="button" onclick="copyMessage(this)" aria-label="Copy response">Copy</button></div>
       `;
         enhanceCode(row.querySelector('.ai-body'));
       }
@@ -2052,11 +2068,32 @@
       scrollToBottom(true);
     }
 
-    function escHtml(s) {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function getAiFamilyName() { return modelSel.selectedOptions?.[0]?.dataset.familyLabel || 'AI'; }
+    async function copyMessage(button) {
+      const row = button.closest('.message-row');
+      const userText = row.querySelector('.msg-bubble.usr')?.innerText;
+      const answers = [...row.querySelectorAll('.ai-body .answer')];
+      const text = userText ?? (answers.length ? answers.map(el => el.innerText).join('\n\n') : row.querySelector('.ai-body')?.innerText) ?? '';
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+        else { const area=document.createElement('textarea'); area.value=text; area.style.position='fixed'; area.style.opacity='0'; document.body.append(area); area.select(); document.execCommand('copy'); area.remove(); }
+        const old=button.textContent; button.textContent='Copied'; setTimeout(()=>button.textContent=old,1200);
+      } catch(e) { button.textContent='Copy failed'; setTimeout(()=>button.textContent='Copy',1500); }
+    }
+    function retryMessage(button) {
+      const row = button.closest('.message-row'), prompt = row?.dataset.retryPrompt;
+      if (!prompt || busy) return;
+      const draft = input.value, draftFiles = pendingFiles;
+      pendingFiles = []; renderChips();
+      input.value = prompt; autoResize(input); sendBtn.disabled = false;
+      sendMessage().finally(() => {
+        input.value = draft; pendingFiles = draftFiles; renderChips(); autoResize(input);
+        sendBtn.disabled = !(input.value.trim() || pendingFiles.length);
+      });
     }
 
-    // Matches, in order: code (left alone), $$..$$, \[..\], \(..\), $..$
+    // Matches, in order: code (left alone), $..$, \[..\], \(..\), $..$
     const MATH_RE = /(```[\s\S]*?```|`[^`\n]*`)|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g;
     const mathCache = new Map();
 
@@ -2102,6 +2139,9 @@
 
       // create an empty AI body to stream into
       const body = addEmptyAiBubble();
+      const aiRow = body.closest('.message-row');
+      aiRow.dataset.retryPrompt = text;
+      if (files.length) aiRow.querySelector('.message-actions button[onclick^="retryMessage"]')?.setAttribute('disabled', '');
       if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 
       // one ordered stream: thinking, tool calls, artifacts and answer text
@@ -2558,7 +2598,7 @@
         ctx.chain = document.createElement('details');
         ctx.chain.className = 'think';
         ctx.chain.innerHTML = '<summary>Thinking…</summary>';
-        ctx.chain.open = true;
+        ctx.chain.open = false;
         ctx.thinkTail = null;
         ctx.stream.append(ctx.chain);
       }
@@ -2699,9 +2739,10 @@
       row.innerHTML = `
           <div class="msg-meta">
               <div class="msg-avatar ai working">${AI_ICON}</div>
-              ai <span class="status working"></span>
+              ${escHtml(getAiFamilyName())} <span class="status working"></span>
           </div>
           <div class="ai-body"></div>
+          <div class="message-actions"><button type="button" onclick="retryMessage(this)" aria-label="Retry response">Retry</button><button type="button" onclick="copyMessage(this)" aria-label="Copy response">Copy</button></div>
       `;
       msgs.appendChild(row);
       scrollToBottom(true);
