@@ -15,7 +15,7 @@ from django.test import SimpleTestCase, TestCase
 
 from . import agent, ollama, plots, context
 from .agent import _compact_messages, _is_repeat, _research_limit_reached
-from .models import Artifact, Chat
+from .models import Artifact, Chat, Message
 
 
 class AgentContinuityTests(SimpleTestCase):
@@ -83,6 +83,40 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertTrue(_research_limit_reached(Run(), "web_search"))
         self.assertFalse(_research_limit_reached(Run(), "fetch_page"))
         self.assertFalse(_research_limit_reached(Run(), "run_python"))
+
+
+class ConversationMemoryTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="memory-test")
+        self.chat = Chat.objects.create(user=self.user, title="Memory test")
+
+    def test_old_turns_become_a_hidden_incremental_checkpoint(self):
+        for i in range(12):
+            Message.objects.create(chat=self.chat, role="user" if i % 2 == 0 else "ai",
+                                   content=f"Important conversation detail {i}")
+        calls = []
+
+        def summarize(previous, turns):
+            calls.append((previous, turns))
+            return "User objective: preserve the important conversation details.\nDecisions: details 0-1."
+
+        summary, through_id, changed = context.refresh_chat_memory(self.chat, summarize)
+        self.assertTrue(changed)
+        self.assertEqual(through_id, 2)
+        self.assertIn("User objective", summary)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.chat.messages.filter(role="memory").count(), 1)
+
+    def test_memory_checkpoint_is_reused_when_no_new_batch_is_ready(self):
+        for i in range(12):
+            Message.objects.create(chat=self.chat, role="user" if i % 2 == 0 else "ai",
+                                   content=f"Turn {i}")
+        context.refresh_chat_memory(self.chat, lambda previous, turns: "A sufficiently long summary of the first turns.")
+        summary, through_id, changed = context.refresh_chat_memory(
+            self.chat, lambda previous, turns: self.fail("should not summarize again"))
+        self.assertFalse(changed)
+        self.assertTrue(summary)
+        self.assertEqual(through_id, 2)
 
 
 class PlotInstructionTests(SimpleTestCase):
