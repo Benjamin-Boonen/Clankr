@@ -65,13 +65,12 @@ def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget
     if estimate_tokens(out) <= budget:
         return out
 
+    recent_start = max(0, len(out) - recent)
     for index, item in enumerate(out):
         if index < recent_start and "images" in item:
             item.pop("images", None)
             item["content"] = (item.get("content", "") +
                                "\n[Earlier image omitted from prompt; refer to its description or ask the user to resend.]")
-
-    recent_start = max(0, len(out) - recent)
     for i, item in enumerate(out):
         if i >= recent_start:
             continue
