@@ -47,6 +47,12 @@ class AgentContinuityTests(SimpleTestCase):
         self.assertLessEqual(context.estimate_tokens(compacted), 500)
         self.assertEqual(len(compacted), len(messages))
 
+    def test_recent_image_payloads_are_not_counted_as_base64_text(self):
+        messages = [{"role": "user", "content": "describe this", "images": ["A" * 200000]}]
+        self.assertLess(context.estimate_tokens(messages), 2000)
+        compacted = context.compact_messages(messages, budget_tokens=2500)
+        self.assertIn("images", compacted[-1])
+
     def test_compaction_does_not_mutate_source_or_tool_metadata(self):
         messages = [{"role": "assistant", "content": "x" * 10000,
                      "tool_calls": [{"id": "call-1", "function": {
