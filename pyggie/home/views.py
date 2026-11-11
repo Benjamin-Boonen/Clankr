@@ -41,7 +41,8 @@ def _prepare_history(chat, model, vision_model):
             errors[a.id] = ollama.friendly_error(e)       # build_history puts this in the prompt
     # Refresh an incremental semantic checkpoint before building the prompt. If the
     # summarizer fails, continue with the previous checkpoint and full recent history.
-    summary, through_id, changed = context.load_chat_memory(chat)[:2] + (False,)
+    summary, through_id, _memory_row = context.load_chat_memory(chat)
+    changed = False
     try:
         summary, through_id, changed = context.refresh_chat_memory(
             chat, lambda previous, turns: ollama.summarize_history(model, previous, turns))
