@@ -114,11 +114,18 @@ def compact_messages(messages, budget_chars=None, recent=RECENT_MESSAGES, budget
         # If protocol metadata alone is oversized, discard oldest messages while
         # keeping the newest user/assistant context and all remaining roles intact.
         while len(out) > 2 and estimate_tokens(out) > budget:
-            remove_at = next((i for i, m in enumerate(out[:-2])
-                              if m.get("role") != "system"), None)
-            if remove_at is None:
+            start = next((i for i, m in enumerate(out[:-2])
+                          if m.get("role") != "system"), None)
+            if start is None:
                 break
-            out.pop(remove_at)
+            # Remove a complete older exchange up to (but not including) the
+            # next user turn, so assistant tool_calls and their tool results
+            # cannot be separated by compaction.
+            next_user = next((i for i in range(start + 1, len(out))
+                              if out[i].get("role") == "user"), None)
+            if next_user is None:
+                break
+            del out[start:next_user]
     return out
 
 
