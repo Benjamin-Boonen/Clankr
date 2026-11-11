@@ -2092,9 +2092,8 @@
         sendBtn.disabled = !(input.value.trim() || pendingFiles.length);
       });
     }
-    }
 
-    // Matches, in order: code (left alone), $$..$$, \[..\], \(..\), $..$
+    // Matches, in order: code (left alone), $..$, \[..\], \(..\), $..$
     const MATH_RE = /(```[\s\S]*?```|`[^`\n]*`)|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)/g;
     const mathCache = new Map();
 
