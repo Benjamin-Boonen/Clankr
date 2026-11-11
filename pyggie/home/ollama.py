@@ -185,7 +185,7 @@ def summarize_history(model, previous_summary, turns):
         "Clearly distinguish confirmed facts from hypotheses. Never invent missing information. "
         "Keep useful technical specifics; do not retain greetings or conversational filler. "
         "Aim for 1,500-3,000 words maximum, shorter when possible.\n\n"
-        "EXISTING MEMORY:\n" + (previous_summary or "(none)") +
+        "EXISTING MEMORY:\n" + ((previous_summary or "(none)")[:12000]) +
         "\n\nNEW TURNS (JSON):\n" + transcript
     )
     response = requests.post(
