@@ -131,10 +131,50 @@ class PlotInstructionTests(SimpleTestCase):
         self.assertIn("graphing is optional, not the default", prompt)
         self.assertIn("a request to solve, derive, calculate, apply a method", prompt)
         self.assertIn("when unsure, answer without a graph", prompt)
+        self.assertIn("plot_function: y=f(x)", prompt)
+        self.assertIn("plot_field: z=f(x,y)", prompt)
+        self.assertIn("plot_surface: z=f(x,y)", prompt)
+        self.assertIn("plot_parametric", prompt)
         descriptions = " ".join(
             tool["function"]["description"].lower() for tool in plots.TOOLS
         )
         self.assertIn("only when", descriptions)
+        names = [tool["function"]["name"] for tool in plots.TOOLS]
+        self.assertEqual(names, ["plot_function", "plot_field", "plot_surface", "plot_parametric"])
+        self.assertEqual(len(names), len(set(names)))
+
+
+class SemanticPlotSelectionTests(SimpleTestCase):
+    def test_function_tool_plots_one_variable(self):
+        _, fig, _ = plots.plot_function({"expr": "sin(x)", "x_min": -3, "x_max": 3})
+        self.assertEqual(fig["data"][0]["type"], "scatter")
+
+    def test_function_tool_rejects_second_independent_variable_with_guidance(self):
+        with self.assertRaisesRegex(plots.PlotError, "use plot_field"):
+            plots.plot_function({"expr": "exp(-x^2-y^2)", "x_min": -3, "x_max": 3})
+
+    def test_field_tool_is_a_2d_heatmap(self):
+        _, fig, _ = plots.plot_field({"expr": "x^2+y^2", "x_min": -2, "x_max": 2,
+                                      "y_min": -2, "y_max": 2})
+        self.assertEqual(fig["data"][0]["type"], "contour")
+        self.assertNotIn("scene", fig["layout"])
+
+    def test_surface_tool_is_a_3d_surface(self):
+        _, fig, _ = plots.plot_surface({"expr": "x^2+y^2", "x_min": -2, "x_max": 2,
+                                        "y_min": -2, "y_max": 2})
+        self.assertEqual(fig["data"][0]["type"], "surface")
+        self.assertIn("scene", fig["layout"])
+
+    def test_parametric_tool_uses_t(self):
+        _, fig, _ = plots.plot_parametric({"x": "cos(t)", "y": "sin(t)",
+                                           "t_min": 0, "t_max": "2*pi"})
+        self.assertEqual(fig["data"][0]["type"], "scatter")
+
+    def test_legacy_names_remain_available_for_saved_runs(self):
+        self.assertTrue(plots.is_plot_tool("plot_2d"))
+        self.assertTrue(plots.is_plot_tool("plot_3d"))
+        self.assertTrue(plots.is_plot_tool("plot_curve"))
+        self.assertEqual(plots.NAMES["plot_2d"], plots.plot_2d)
 
 
 def build(name, args):
@@ -348,7 +388,8 @@ class Wiring(TestCase):
         self.assertFalse(agent.needs_approval("plot_2d", {}))
         self.assertFalse((Path(settings.BASE_DIR) / "agent_workspaces" / str(self.chat.id)).exists())
         names = {t["function"]["name"] for t in agent.TOOLS}
-        self.assertTrue({"plot_2d", "plot_3d", "plot_curve", "finish"} <= names)
+        self.assertTrue({"plot_function", "plot_field", "plot_surface", "plot_parametric", "finish"} <= names)
+        self.assertFalse({"plot_2d", "plot_3d", "plot_curve"} & names)
 
     def test_agent_does_not_redraw_identical_plot(self):
         args = {"exprs": ["x"], "x_min": 0, "x_max": 1}
@@ -375,8 +416,9 @@ class Wiring(TestCase):
         self.assertEqual(events[1][1]["name"], "plot_2d")
         self.assertIn("Plotted", events[1][1]["out"])
         first, second = (c.kwargs["json"] for c in post.call_args_list)
-        self.assertIn("plot_3d", [t["function"]["name"] for t in first["tools"]])
-        self.assertIn("plot_2d", [t["function"]["name"] for t in first["tools"]])  # tool schema is sent separately
+        plot_names = {t["function"]["name"] for t in first["tools"]}
+        self.assertTrue({"plot_function", "plot_field", "plot_surface", "plot_parametric"} <= plot_names)
+        self.assertFalse({"plot_2d", "plot_3d", "plot_curve"} & plot_names)  # legacy aliases stay internal
         self.assertIn("Plotted", second["messages"][-1]["content"])          # the model gets a summary back
         self.assertEqual(Artifact.objects.filter(chat=self.chat, kind="plot").count(), 1)
 
