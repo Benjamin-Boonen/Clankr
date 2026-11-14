@@ -9,7 +9,7 @@ from .models import Chat, Message, AgentRun, Artifact
 from . import agent, files, plots
 from django.http import HttpResponse
 from django.core.cache import cache
-from . import ollama, context
+from . import ollama, context, airllm
 
 
 def _stop_key(chat_id):
@@ -169,6 +169,8 @@ def agent_send(request):
     data, uploads = _parse(request)
     content, model = data['content'], data.get('model', 'llama3')
     thinking = data.get('thinking', True) is not False
+    if airllm.is_model(model):
+        return JsonResponse({"error": "Agent Mode currently requires an Ollama model. AIRLLM supports direct text chat in this experimental integration."}, status=400)
     if data.get('chat_id'):
         chat = get_object_or_404(Chat, id=data['chat_id'], user=request.user)
     else:
