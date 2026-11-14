@@ -403,7 +403,7 @@ TOOLS = [
         {"expr": _S, "exprs": {"type": "array", "items": _S, "description": "optional alternative: multiple formulas in x"},
          "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
          "title": _S, "x_label": _S, "y_label": _S},
-        ["x_min", "x_max"]),
+        ["expr", "x_min", "x_max"]),
     _tool(
         "plot_field",
         "Plot a scalar field z=f(x,y) over a 2D plane as a 2D heatmap/contour map. Use when BOTH x and y are independent variables and colour represents the value. "
