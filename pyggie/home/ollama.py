@@ -11,7 +11,7 @@ import requests
 import trafilatura
 from ddgs import DDGS
 
-from . import plots, context
+from . import plots, context, airllm
 
 OLLAMA_BASE = "http://localhost:11434"
 logger = logging.getLogger(__name__)
@@ -53,6 +53,8 @@ SYSTEM_PROMPT = (
 
 def friendly_error(e):
     """Turn an exception into something a human can act on."""
+    if airllm.is_model(str(e)) or "AIRLLM" in str(e) or "127.0.0.1:8091" in str(e):
+        return airllm.friendly_error(e)
     if isinstance(e, requests.ConnectionError):
         return f"Can't reach Ollama at {OLLAMA_BASE}. Is it running? (try: ollama serve)"
     if isinstance(e, requests.Timeout):
@@ -158,6 +160,8 @@ def open_chat(payload, **kwargs):
 @lru_cache(maxsize=None)
 def get_caps(name):
     """Capabilities of a model, e.g. ['completion', 'tools', 'thinking']."""
+    if airllm.is_model(name):
+        return airllm.get_caps(name)
     r = requests.post(f"{OLLAMA_BASE}/api/show", json={"model": name})
     _check(r)
     return tuple(r.json().get("capabilities", []))
@@ -175,6 +179,8 @@ def summarize_history(model, previous_summary, turns):
     This is a separate, tool-free request. It must never mutate or replace the source
     transcript; callers persist the result only after a successful response.
     """
+    if airllm.is_model(model):
+        return airllm.summarize_history(model, previous_summary, turns)
     transcript = json.dumps(turns, ensure_ascii=False, separators=(",", ":"))
     prompt = (
         "Update the conversation memory below using the new chronological turns. "
@@ -201,6 +207,8 @@ def summarize_history(model, previous_summary, turns):
 def is_loaded(model):
     """True if Ollama already holds this model in memory (so the first reply is fast).
     Any error counts as loaded: we only announce a slow load when we are sure."""
+    if airllm.is_model(model):
+        return airllm.is_loaded(model)
     try:
         r = requests.get(f"{OLLAMA_BASE}/api/ps", timeout=3)
         return (not r.ok) or any(m.get("name") == model or m.get("model") == model
@@ -210,6 +218,8 @@ def is_loaded(model):
 
 
 def load_notice(model):
+    if airllm.is_model(model):
+        return airllm.load_notice(model)
     return f"Loading {pretty_name(model)} into memory (the first reply is slower)…"
 
 
@@ -277,6 +287,8 @@ def split_ollama_name(name):
 
 def pretty_name(name):
     """'phi4-mini:4b' -> 'Phi 4 Mini · 4B'; 'gemma4:e3b' -> 'Gemma 4 · E3B'."""
+    if airllm.is_model(name):
+        return airllm.pretty_name(name)
     base, _, size = name.partition(":")
     base = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", base)          # phi4 -> phi 4
     title = " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_\s]+", base) if w)
@@ -320,6 +332,7 @@ def get_models():
             "caps_error": caps_error,
             **parts,
         })
+    out.extend(airllm.get_models())
     return out
 
 
@@ -425,6 +438,9 @@ def chat_stream(model, messages, chat_id=None, thinking=True):
     Continuations are text-only and bounded: tool rounds remain governed by
     MAX_ROUNDS, while a truncated final answer gets at most two extra calls.
     """
+    if airllm.is_model(model):
+        yield from airllm.chat_stream(model, messages, chat_id=chat_id, thinking=thinking)
+        return
     caps = get_caps(model)
     system = SYSTEM_PROMPT + (plots.PLOT_PROMPT if "tools" in caps else "") + \
         f"\nToday's date: {datetime.date.today():%A %d %B %Y}."
