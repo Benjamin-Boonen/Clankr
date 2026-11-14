@@ -18,6 +18,10 @@ THIS PROJECT IS PARTLY VIBECODED, I DO NOT CLAIM FULL RESPONSIBILITY FOR THE EXE
 
 ---
 
+## Optional AIRLLM Backend
+
+AIRLLM can be run as a separate experimental text-generation backend alongside Ollama. See [`pyggie/AIRLLM.md`](pyggie/AIRLLM.md) for isolated installation, configuration, limitations and startup instructions. Ollama remains the default and Agent Mode backend.
+
 ## UI Architecture & Components
 
 - **Templates (`templates/index.html`)**: Dynamic model iteration (`available_models`) and data-bound elements (`model-badge`, `current-model-label`)[cite: 1].
