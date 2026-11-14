@@ -2167,8 +2167,11 @@
       } else {
         resp = await postJSON(agent ? '/agent/send/' : '/send/', fields, abort.signal);
       }
-      if (!resp.ok) throw new Error(resp.status === 403 ? 'Session expired or CSRF failed (403) — reload the page'
-                                                        : `Server error ${resp.status}`);
+      if (!resp.ok) {
+        let detail = resp.status === 403 ? 'Session expired or CSRF failed (403) — reload the page' : `Server error ${resp.status}`;
+        try { const problem = await resp.clone().json(); if (problem.error) detail = problem.error; } catch (e) { }
+        throw new Error(detail);
+      }
       await consume(resp, ctx);
       } catch (e) {
         // a stop aborts the browser's read; that is not an error
