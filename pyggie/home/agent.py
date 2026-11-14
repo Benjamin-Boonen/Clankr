@@ -32,7 +32,7 @@ TOOLS = [
     _fn("load_skill", "Load detailed instructions for a skill. Available: " + ", ".join(
         sorted(p.name for p in SKILL_DIR.iterdir() if p.is_dir())) if SKILL_DIR.exists() else "load_skill",
         {"name": S}, ["name"]),
-    *plots.TOOLS,             # plot_2d, plot_3d, plot_curve (home/plots.py)
+    *plots.TOOLS,             # canonical semantic plotting tools (home/plots.py)
     _fn("finish", "Call when the task is fully done, with a short summary for the user.", {"summary": S}, ["summary"]),
 ]
 
