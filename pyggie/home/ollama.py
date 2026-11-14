@@ -53,7 +53,7 @@ SYSTEM_PROMPT = (
 
 def friendly_error(e):
     """Turn an exception into something a human can act on."""
-    if airllm.is_model(str(e)) or "AIRLLM" in str(e) or "127.0.0.1:8091" in str(e):
+    if isinstance(e, airllm.AirllmConnectionError) or "AIRLLM" in str(e) or "127.0.0.1:8091" in str(e):
         return airllm.friendly_error(e)
     if isinstance(e, requests.ConnectionError):
         return f"Can't reach Ollama at {OLLAMA_BASE}. Is it running? (try: ollama serve)"
