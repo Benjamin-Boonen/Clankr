@@ -17,12 +17,13 @@ does not yet support Agent Mode, native tool calls or vision.
 
 ## Installation
 
-Use a dedicated virtual environment. Do not install AIRLLM's dependencies into
-Pyggie's existing environment.
+Use a dedicated Python 3.11 virtual environment. AIRLLM's PyTorch/Transformers
+stack may not support the Python 3.14 environment currently used by Pyggie. Do
+not install AIRLLM's dependencies into Pyggie's existing environment.
 
 ```bash
 cd ~/Documents/Clankr/pyggie
-python3 -m venv .venv-airllm
+python3.11 -m venv .venv-airllm
 source .venv-airllm/bin/activate
 python -m pip install --upgrade pip
 # First install a PyTorch build compatible with your NVIDIA GPU and driver.
