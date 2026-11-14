@@ -1,0 +1,6 @@
+# Install in a SEPARATE virtual environment from Pyggie's Django environment.
+# Choose a PyTorch/CUDA wheel compatible with the host GPU first; Pascal GPUs
+# (e.g. GTX 10-series) need an older supported CUDA/PyTorch combination.
+airllm
+fastapi
+uvicorn[standard]
