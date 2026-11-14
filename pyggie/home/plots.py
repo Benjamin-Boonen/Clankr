@@ -231,6 +231,7 @@ def plot_2d(args):
     xs = np.linspace(x0, x1, N2)
     traces, notes = [], []
     for src in exprs:
+        _check_variables(src, {"x"}, "plot_function", "plot_field (for f(x, y))")
         ys = _break_poles(_sample(src, xs.shape, x=xs))
         if np.isnan(ys).all():
             raise PlotError(f"'{src}' has no finite values for x in [{x0:g}, {x1:g}]")
@@ -250,9 +251,10 @@ def plot_3d(args):
     if len(src) != 1:
         raise PlotError("plot_3d draws one formula z = f(x, y); call it again for another surface")
     src = src[0]
+    style = _text(args, "style", "surface").lower()
+    _check_variables(src, {"x", "y"}, "plot_field/plot_surface", "plot_parametric only when coordinates are functions of t")
     x0, x1 = _range(args, "x_min", "x_max")
     y0, y1 = _range(args, "y_min", "y_max")
-    style = _text(args, "style", "surface").lower()
     if style not in ("surface", "contour"):
         raise PlotError('style must be "surface" or "contour"')
     xs, ys = np.linspace(x0, x1, N3), np.linspace(y0, y1, N3)
@@ -286,6 +288,9 @@ def plot_curve(args):
         raise PlotError("x and y (formulas in t) are required")
     t0, t1 = _range(args, "t_min", "t_max")
     ts = np.linspace(t0, t1, NCURVE)
+    for component in (xe, ye, ze):
+        if component not in (None, ""):
+            _check_variables(component, {"t"}, "plot_parametric", "plot_function for y=f(x), or plot_field for z=f(x,y)")
     comps = [_sample(e, ts.shape, t=ts) for e in (xe, ye)]
     three_d = ze not in (None, "")
     if three_d:
@@ -313,7 +318,68 @@ def plot_curve(args):
         (f"; undefined at {int(bad.sum())} of {len(ts)} points." if bad.any() else ".")
 
 
-NAMES = {"plot_2d": plot_2d, "plot_3d": plot_3d, "plot_curve": plot_curve}
+def _formula_variables(src):
+    """Return mathematical variables used by a formula, excluding constants and function names."""
+    tree = _parse(src)
+    called = {node.func.id for node in ast.walk(tree)
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} - set(CONSTS) - set(FUNCS) - called
+
+
+def _check_variables(src, allowed, tool_name, suggestion):
+    unexpected = sorted(_formula_variables(src) - set(allowed))
+    if unexpected:
+        names = ", ".join(unexpected)
+        raise PlotError(
+            f"{tool_name} accepts only {', '.join(sorted(allowed))} as independent variable(s), "
+            f"but the formula also uses {names}. This is a tool-selection error: "
+            f"use {suggestion} for this kind of expression."
+        )
+
+
+def _as_expr_args(args):
+    """Accept the canonical singular expr and legacy exprs payloads."""
+    converted = dict(args)
+    if "expr" in converted and "exprs" not in converted:
+        converted["exprs"] = [converted.pop("expr")]
+    return converted
+
+
+def plot_function(args):
+    converted = _as_expr_args(args)
+    exprs = _exprs(converted.get("exprs"))
+    for src in exprs:
+        _check_variables(src, {"x"}, "plot_function", "plot_field (for f(x, y))")
+    return plot_2d(converted)
+
+
+def plot_field(args):
+    converted = _as_expr_args(args)
+    converted["style"] = "contour"
+    return plot_3d(converted)
+
+
+def plot_surface(args):
+    converted = _as_expr_args(args)
+    converted["style"] = "surface"
+    return plot_3d(converted)
+
+
+def plot_parametric(args):
+    return plot_curve(args)
+
+
+# Canonical names are exposed to models. Legacy names remain internal aliases so
+# saved transcripts and in-flight AgentRuns created before this change still execute.
+NAMES = {
+    "plot_function": plot_function,
+    "plot_field": plot_field,
+    "plot_surface": plot_surface,
+    "plot_parametric": plot_parametric,
+    "plot_2d": plot_2d,
+    "plot_3d": plot_3d,
+    "plot_curve": plot_curve,
+}
 
 
 # ─── tool schemas (what the model sees) ───
@@ -329,39 +395,62 @@ _SYNTAX = ("Formulas: use * for every multiplication (2*x, not 2x), ^ or ** for 
            "floor ceil min max step. Range limits may be numbers or constant formulas like \"2*pi\". ")
 
 TOOLS = [
-    _tool("plot_2d", "Draw an interactive 2D graph of one or more functions y = f(x) and show it to the user. "
-          "Use ONLY when the user explicitly asks for a graph/plot, or when a visual is essential to explain a relationship that prose and equations cannot communicate clearly. " + _SYNTAX +
-          "Optional y_min and y_max (both) crop the vertical range, useful for tan or 1/x.",
-          {"exprs": {"type": "array", "items": _S, "description": 'formulas in x, e.g. ["sin(x)", "x^2/10"] (max 6)'},
-           "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
-           "title": _S, "x_label": _S, "y_label": _S},
-          ["exprs", "x_min", "x_max"]),
-    _tool("plot_3d", "Draw an interactive 3D surface (or a 2D contour map) of z = f(x, y) and show it to the user. Use ONLY when explicitly requested or when the spatial shape is essential to the explanation; do not create one merely because an equation has multiple variables. " + _SYNTAX,
-          {"expr": {"type": "string", "description": "formula in x and y, e.g. sin(x)*cos(y)"},
-           "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
-           "style": {"type": "string", "enum": ["surface", "contour"], "description": "surface (default, 3D) or contour (2D map)"},
-           "title": _S, "x_label": _S, "y_label": _S, "z_label": _S},
-          ["expr", "x_min", "x_max", "y_min", "y_max"]),
-    _tool("plot_curve", "Draw a parametric curve (x(t), y(t)) in 2D, or (x(t), y(t), z(t)) in 3D if z is given: "
-          "trajectories, orbits, Lissajous figures, helices. Use ONLY when explicitly requested or when the path/shape itself is essential to the task; do not plot a formula simply because it contains a parameter. " + _SYNTAX.replace("variables", "t"),
-          {"x": {"type": "string", "description": "x(t), e.g. cos(t)"},
-           "y": {"type": "string", "description": "y(t), e.g. sin(t)"},
-           "z": {"type": "string", "description": "optional z(t), e.g. t/5 (makes the curve 3D)"},
-           "t_min": _N, "t_max": _N, "title": _S, "x_label": _S, "y_label": _S, "z_label": _S},
-          ["x", "y", "t_min", "t_max"]),
+    _tool(
+        "plot_function",
+        "Plot one or more ordinary functions y=f(x) as 2D line graphs. Use this ONLY when every formula has exactly one independent variable: x. "
+        "Examples: sin(x), x^2, exp(-x^2). Do NOT use for formulas containing y; use plot_field for f(x,y). "
+        "This is a 2D graph with x and y axes, NOT a 2D heatmap. " + _SYNTAX,
+        {"expr": _S, "exprs": {"type": "array", "items": _S, "description": "optional alternative: multiple formulas in x"},
+         "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
+         "title": _S, "x_label": _S, "y_label": _S},
+        ["expr", "x_min", "x_max"]),
+    _tool(
+        "plot_field",
+        "Plot a scalar field z=f(x,y) over a 2D plane as a 2D heatmap/contour map. Use when BOTH x and y are independent variables and colour represents the value. "
+        "Examples: x^2+y^2, exp(-x^2-y^2). This is NOT a line graph and NOT a 3D surface. "
+        "For a raised 3D surface use plot_surface. " + _SYNTAX,
+        {"expr": _S, "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
+         "title": _S, "x_label": _S, "y_label": _S, "z_label": _S},
+        ["expr", "x_min", "x_max", "y_min", "y_max"]),
+    _tool(
+        "plot_surface",
+        "Plot a scalar function z=f(x,y) as an interactive 3D surface where height represents the value. "
+        "Use ONLY when the user wants a 3D surface/shape. For a 2D heatmap or contour map use plot_field instead. "
+        "Examples: x^2+y^2, sin(x)*cos(y). " + _SYNTAX,
+        {"expr": _S, "x_min": _N, "x_max": _N, "y_min": _N, "y_max": _N,
+         "title": _S, "x_label": _S, "y_label": _S, "z_label": _S},
+        ["expr", "x_min", "x_max", "y_min", "y_max"]),
+    _tool(
+        "plot_parametric",
+        "Plot a path whose coordinates are functions of a parameter t: (x(t), y(t)) in 2D or (x(t), y(t), z(t)) in 3D. "
+        "Use for trajectories, orbits, Lissajous curves and helices. Do NOT use for an ordinary y=f(x) function "
+        "or a scalar field z=f(x,y). " + _SYNTAX,
+        {"x": {"type": "string", "description": "x(t), e.g. cos(t)"},
+         "y": {"type": "string", "description": "y(t), e.g. sin(t)"},
+         "z": {"type": "string", "description": "optional z(t), e.g. t/5"},
+         "t_min": _N, "t_max": _N, "title": _S, "x_label": _S, "y_label": _S, "z_label": _S},
+        ["x", "y", "t_min", "t_max"]),
 ]
 
 PLOT_PROMPT = (
     "\nGraphing is optional, not the default. Prefer a direct explanation in prose and equations. "
     "Create a graph ONLY if the user explicitly asks for a plot/graph/visualization, or if the visual "
     "itself is essential to understanding something that cannot be communicated clearly with prose, "
-    "equations, or a small table. Before plotting, ask: what specific insight will this image add? "
-    "If you cannot name a concrete insight, do not plot. Never make duplicate or near-duplicate plots, "
-    "and never plot the exact solution and a numerical approximation side-by-side unless the user asks "
-    "for a visual comparison or the comparison is central to the question. A request to solve, derive, "
-    "calculate, apply a method, or explain an equation is NOT by itself a request for a graph. "
-    "When unsure, answer without a graph. If the user explicitly requests a graph, create only the "
-    "minimum number of plots needed. The graph appears in chat and is interactive. "
+    "equations, or a small table. Before plotting, identify the specific insight the image adds. "
+    "If no concrete insight exists, do not plot. Never make duplicate or near-duplicate plots. "
+    "A request to solve, derive, calculate, apply a method, or explain an equation is NOT by itself "
+    "a request for a graph. When unsure, answer without a graph. "
+    "\n\nPLOT TOOL SELECTION — choose by the mathematical inputs and intended visual, not by the "
+    "number of dimensions mentioned in the user's wording: "
+    "• plot_function: y=f(x), one independent variable x; an ordinary 2D line graph. "
+    "• plot_field: z=f(x,y), two independent variables; a 2D heatmap/contour map where colour represents z. "
+    "• plot_surface: z=f(x,y), two independent variables; a 3D surface where height represents z. "
+    "• plot_parametric: coordinates x(t), y(t), optionally z(t), all functions of one parameter t; paths/orbits. "
+    "Never send a formula containing y to plot_function. A 2D heatmap is not the same as a 2D line graph. "
+    "For a sigma-bond/electron-density cross-section expressed as rho(x,y), choose plot_field, not plot_function. "
+    "Examples: sin(x) → plot_function; x^2+y^2 as colours → plot_field; x^2+y^2 as a raised surface → plot_surface; "
+    "x=cos(t), y=sin(t) → plot_parametric. "
+    "\nUse the minimum number of plots needed. The graph appears in chat and is interactive. "
     "You cannot see it: use the tool summary to describe it."
 )
 
