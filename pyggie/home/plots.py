@@ -433,14 +433,14 @@ TOOLS = [
 ]
 
 PLOT_PROMPT = (
-    "\\nGraphing is optional, not the default. Prefer a direct explanation in prose and equations. "
+    "\nGraphing is optional, not the default. Prefer a direct explanation in prose and equations. "
     "Create a graph ONLY if the user explicitly asks for a plot/graph/visualization, or if the visual "
     "itself is essential to understanding something that cannot be communicated clearly with prose, "
     "equations, or a small table. Before plotting, identify the specific insight the image adds. "
     "If no concrete insight exists, do not plot. Never make duplicate or near-duplicate plots. "
     "A request to solve, derive, calculate, apply a method, or explain an equation is NOT by itself "
     "a request for a graph. When unsure, answer without a graph. "
-    "\\n\\nPLOT TOOL SELECTION — choose by the mathematical inputs and intended visual, not by the "
+    "\n\nPLOT TOOL SELECTION — choose by the mathematical inputs and intended visual, not by the "
     "number of dimensions mentioned in the user's wording: "
     "• plot_function: y=f(x), one independent variable x; an ordinary 2D line graph. "
     "• plot_field: z=f(x,y), two independent variables; a 2D heatmap/contour map where colour represents z. "
@@ -450,7 +450,7 @@ PLOT_PROMPT = (
     "For a sigma-bond/electron-density cross-section expressed as rho(x,y), choose plot_field, not plot_function. "
     "Examples: sin(x) → plot_function; x^2+y^2 as colours → plot_field; x^2+y^2 as a raised surface → plot_surface; "
     "x=cos(t), y=sin(t) → plot_parametric. "
-    "\\nUse the minimum number of plots needed. The graph appears in chat and is interactive. "
+    "\nUse the minimum number of plots needed. The graph appears in chat and is interactive. "
     "You cannot see it: use the tool summary to describe it."
 )
 
