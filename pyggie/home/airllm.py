@@ -11,6 +11,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 PREFIX = "airllm:"
+
+
+class AirllmConnectionError(RuntimeError):
+    """The optional AIRLLM sidecar could not be reached."""
 DEFAULT_BASE = "http://127.0.0.1:8091"
 
 
@@ -82,7 +86,7 @@ def load_notice(name):
 
 
 def friendly_error(exc):
-    if isinstance(exc, requests.ConnectionError):
+    if isinstance(exc, (requests.ConnectionError, AirllmConnectionError)):
         return (
             f"Can't reach the AIRLLM sidecar at {base_url()}. "
             "Start it with the command in AIRLLM.md."
@@ -106,9 +110,12 @@ def chat_stream(model, messages, chat_id=None, thinking=True):
         "max_new_tokens": int(os.environ.get("CLANKR_AIRLLM_MAX_NEW_TOKENS", "1024")),
         "temperature": 0.2,
     }
-    response = requests.post(
-        f"{base_url()}/generate", json=payload, stream=True, timeout=(10, None)
-    )
+    try:
+        response = requests.post(
+            f"{base_url()}/generate", json=payload, stream=True, timeout=(10, None)
+        )
+    except requests.RequestException as exc:
+        raise AirllmConnectionError(str(exc)) from exc
     try:
         if not response.ok:
             raise RuntimeError(f"AIRLLM {response.status_code}: {response.text[:2000]}")
